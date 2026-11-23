@@ -24,8 +24,10 @@ wearable_demo/
     └── profile.csv                    one row per participant: anthropometrics, a lab value, a fingerstick
 ```
 
-Concepts and units come from the shared registry
-`configs/conditions/cardiometabolic.yaml`; no separate concept file is needed.
+Concepts and units come from the repository's registries:
+`configs/concepts/shared.yaml` (generic concepts) and
+`configs/conditions/cardiometabolic.yaml` (cardiometabolic concepts). No
+dataset-specific concept file is needed.
 
 ## Fictional participants
 
@@ -53,7 +55,8 @@ cites it as evidence for its documented transformations.
 | `Meal`, `Kcal`, `Carbs`, `Photo` | Meal label, energy (kcal), carbohydrate (g), photo path |
 | `Amount` | Amount consumed, documented as 0-100 % |
 | app export `recorded_at` | ISO-8601 time with UTC offset |
-| app export `value` | Glucose in mmol/L when `type` = `glucose` |
+| app export `value` | Glucose in mmol/L when `type` = `glucose`; each row is one reading as recorded, not interpolated |
+| device export sensor columns | *Whether values are raw readings or interpolated is not documented* |
 | profile `Weight (lb)`, `Height` | Pounds, inches |
 | profile `LDL` | mg/dL; the value **999 means "calculation error"** |
 | profile second `Time` column | Clock time of the fingerstick; the date is not recorded |
@@ -88,6 +91,7 @@ cites it as evidence for its documented transformations.
 | `profile.csv` line 4 | empty row | reject the row (`empty_row`) |
 | `profile.csv` | weight `90 kg` (unit inside the value) | keep `raw_value`; value empty; `unparseable_numeric` (not reinterpreted) |
 | device export | timezone not documented | localise with an explicit, registered assumption (`A-DEMO-TZ-01`) |
+| device export | sampling origin (raw vs interpolated) not documented | leave `is_interpolated` unknown; only the app export is declared native (documented) |
 
 ## How to use it
 
@@ -96,7 +100,7 @@ From the repository root:
 ```bash
 env -u PYTHONPATH .venv/bin/pghd-ready ingest \
   --source    data/synthetic/wearable_demo/config/source.yaml \
-  --concepts  configs/conditions/cardiometabolic.yaml \
+  --concepts  configs/concepts/shared.yaml configs/conditions/cardiometabolic.yaml \
   --data-root data/synthetic/wearable_demo/raw \
   --out       data/processed/wearable_demo
 ```

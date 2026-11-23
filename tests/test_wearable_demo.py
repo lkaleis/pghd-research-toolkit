@@ -13,7 +13,8 @@ from pghd_ready.core.provenance import sha256_file
 
 import synthetic_sources as syn
 
-ARGS = ["ingest", "--source", str(syn.DEMO_CONFIG), "--concepts", str(syn.CARDIO_CONCEPTS),
+CONCEPTS = [str(p) for p in syn.CONCEPT_FILES]
+ARGS = ["ingest", "--source", str(syn.DEMO_CONFIG), "--concepts", *CONCEPTS,
         "--data-root", str(syn.DEMO_DIR / "raw")]
 
 
@@ -58,6 +59,21 @@ def test_report_status_and_counts_match_the_run(demo_run):
     assert "not implemented yet" in report and "not** an assessment of data quality" in report
 
 
+def test_report_shows_sampling_origin_and_domains(demo_run):
+    report = (demo_run / "ingestion_report.md").read_text()
+    summary = json.loads((demo_run / "ingest_summary.json").read_text())
+    # only the app export is declared native; every device stream stays unknown by default
+    assert "| app_glucose | 4 | 0 | 0 | 0 | 0 | declared native (documented:" in report
+    assert "| patch_a | 0 | 0 | 0 | 0 | 10 | not declared or classified - unknown by default |" in report
+    origin = {r["stream_id"]: r for r in summary["sampling_origin_by_stream"]}
+    assert sum(r["unknown"] for r in origin.values()) == 34 and origin["app_glucose"]["native"] == 4
+    # domain table: tags are descriptive; demographics untagged
+    assert "PGHD domains represented" in report
+    assert "| behavioural | 9 | 8 | 0 |" in report  # wrist_met 6 + wrist_intensity 3; 8 events
+    assert "| (untagged) | 0 | 0 | 8 |" in report  # sex 4 + ldl 4
+    assert {d["domain"] for d in summary["records_by_domain"]} == {"physiological", "behavioural", None}
+
+
 def test_report_does_not_overclaim(demo_run):
     report = (demo_run / "ingestion_report.md").read_text().lower()
     for phrase in ("high quality", "data quality is good", "good quality"):
@@ -89,7 +105,7 @@ def test_failed_run_writes_a_failure_report(tmp_path):
     out = tmp_path / "out"
     (out).mkdir()
     (out / "observations.parquet").write_text("stale output from an earlier run")
-    code = cli.main(["ingest", "--source", str(syn.DEMO_CONFIG), "--concepts", str(syn.CARDIO_CONCEPTS),
+    code = cli.main(["ingest", "--source", str(syn.DEMO_CONFIG), "--concepts", *CONCEPTS,
                      "--data-root", str(raw), "--out", str(out), "--base-dir", str(tmp_path)])
     assert code == 1
     report = (out / "ingestion_report.md").read_text()
@@ -109,7 +125,7 @@ def test_clean_source_reports_success(tmp_path):
                                          "unit": "/min"}]}]}
     src = syn.write_config(tmp_path / "clean.yaml", cfg)
     out = tmp_path / "out"
-    assert cli.main(["ingest", "--source", str(src), "--concepts", str(syn.CARDIO_CONCEPTS), "--data-root",
+    assert cli.main(["ingest", "--source", str(src), "--concepts", *CONCEPTS, "--data-root",
                      str(raw), "--out", str(out), "--base-dir", str(tmp_path)]) == 0
     report = (out / "ingestion_report.md").read_text()
     assert "SUCCESS" in report and "Every source record was used" in report

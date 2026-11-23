@@ -1,8 +1,11 @@
+import re
+
 import pandas as pd
 import pytest
 
 from pghd_ready.core import units
 from pghd_ready.core.concepts import (
+    PGHD_DOMAINS,
     Concept,
     ConceptError,
     ConceptKind,
@@ -14,6 +17,7 @@ from pghd_ready.core.concepts import (
 from conftest import REPO_ROOT, make_observations
 
 CARDIO_YAML = REPO_ROOT / "configs" / "conditions" / "cardiometabolic.yaml"
+SHARED_YAML = REPO_ROOT / "configs" / "concepts" / "shared.yaml"
 
 
 # ------------------------------------------------------------------ units
@@ -76,15 +80,50 @@ def test_cardiometabolic_registry_loads_and_is_minimal():
     reg = ConceptRegistry.from_yaml(CARDIO_YAML)
     assert reg.get("glucose_interstitial").canonical_unit == "mg/dL"
     assert reg.get("glucose_interstitial").kind is ConceptKind.OBSERVATION
-    assert reg.get("sex").value_type is ValueType.CATEGORICAL
     # HbA1c deliberately has no mmol/mol conversion (non-linear; not to be guessed)
     with pytest.raises(ConceptError):
         reg.get("hba1c").factor_to_canonical("mmol/L")
     assert len(reg.concepts) < 40  # guard against registry sprawl
 
 
+def test_shared_registry_holds_general_concepts_only():
+    shared = ConceptRegistry.from_yaml(SHARED_YAML)
+    cardio = ConceptRegistry.from_yaml(CARDIO_YAML)
+    assert shared.get("sex").value_type is ValueType.CATEGORICAL
+    assert {"heart_rate", "body_weight", "step_count", "age"} <= set(shared.concepts)
+    assert not set(shared.concepts) & set(cardio.concepts)  # split, not duplicated
+    condition_terms = re.compile(r"glucose|insulin|cholesterol|hba1c|lipid|triglycer|diabet", re.IGNORECASE)
+    text = SHARED_YAML.read_text()
+    assert not condition_terms.search(text), condition_terms.findall(text)
+    assert len(shared.concepts) < 40
+
+
+def test_registries_merge_and_conflicts_fail():
+    reg = ConceptRegistry.from_yaml_files([SHARED_YAML, CARDIO_YAML])
+    assert {"heart_rate", "glucose_interstitial"} <= set(reg.concepts)
+    assert ConceptRegistry.from_yaml_files([SHARED_YAML, SHARED_YAML]).concepts == ConceptRegistry.from_yaml(
+        SHARED_YAML).concepts  # identical redefinition is fine
+    clash = ConceptRegistry.from_mapping({"concepts": {"heart_rate": {
+        "kind": "observation", "value_type": "numeric", "canonical_unit": "/min", "description": "different"}}})
+    with pytest.raises(ConceptError, match="Conflicting"):
+        reg.merge(clash)
+
+
+def test_domain_tags_are_optional_many_to_many_and_validated():
+    reg = ConceptRegistry.from_yaml_files([SHARED_YAML, CARDIO_YAML])
+    assert reg.domains_of("glucose_interstitial") == ("physiological",)
+    assert reg.domains_of("activity_energy_expenditure") == ("behavioural", "physiological")
+    assert reg.domains_of("sex") == ()  # untagged is allowed
+    assert set(PGHD_DOMAINS) == {"physiological", "behavioural", "medication", "patient_reported"}
+    for bad, msg in ((["behavioral"], "unknown domain"), (["physiological", "physiological"], "duplicate"),
+                     ("physiological", "list of strings")):
+        with pytest.raises(ConceptError, match=msg):
+            ConceptRegistry.from_mapping({"concepts": {"x": {
+                "kind": "attribute", "value_type": "categorical", "description": "d", "domains": bad}}})
+
+
 def test_check_table_concepts():
-    reg = ConceptRegistry.from_yaml(CARDIO_YAML)
+    reg = ConceptRegistry.from_yaml_files([SHARED_YAML, CARDIO_YAML])
     obs = make_observations()
     assert check_table_concepts(obs, reg, ConceptKind.OBSERVATION) == []
     obs.loc[0, "unit"] = "mmol/L"

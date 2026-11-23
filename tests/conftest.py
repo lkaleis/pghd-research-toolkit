@@ -25,7 +25,7 @@ def make_observations(tz: str | None = None) -> pd.DataFrame:
             "value": [100.0, 105.5, None],
             "unit": ["mg/dL"] * 3,
             "raw_value": ["100", "105.5", None],
-            "is_interpolated": [False, False, False],
+            "is_interpolated": pd.array([False, pd.NA, True], dtype="boolean"),  # native / unknown / interpolated
             "quality_flags": [[], ["suspected_spike"], []],
             "source_file": ["export/p1.csv"] * 3,
             "source_row": pd.array([1, 2, 3], dtype="Int64"),
@@ -86,6 +86,9 @@ def make_streams(tz: str | None = None) -> pd.DataFrame:
             "last_timestamp": pd.to_datetime(["2000-01-10", "2000-01-12"]).tz_localize(tz).as_unit("ns"),
             "n_rows_source": pd.array([10, 20], dtype="Int64"),
             "n_rows_output": pd.array([10, 5], dtype="Int64"),
+            "n_sampling_native": pd.array([10, 2], dtype="Int64"),
+            "n_sampling_interpolated": pd.array([0, 1], dtype="Int64"),
+            "n_sampling_unknown": pd.array([0, 2], dtype="Int64"),
             "quality_flags": [[], []],
         }
     )

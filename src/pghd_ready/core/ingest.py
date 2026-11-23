@@ -39,7 +39,7 @@ import pandas as pd
 
 from . import units as _units
 from .annotations import AnnotationRegistry, FlagAction, IssueCategory, validate_flags
-from .concepts import ConceptKind, ConceptRegistry, ValueType, check_table_concepts
+from .concepts import ConceptKind, ConceptRegistry, ValueType, check_table_concepts, domain_record_counts
 from .config import (
     AttributeSpec,
     ConfigError,
@@ -54,6 +54,7 @@ from .config import (
 )
 from .io import write_table
 from .provenance import RunManifest, TransformBasis, TransformLog, _utc_now, canonical_json
+from .sampling import ORIGIN_LABELS, origin_counts, origin_evidence_counts, origin_labels
 from .schemas import (
     event_schema,
     observation_schema,
@@ -90,7 +91,9 @@ EVENT_CORE_COLUMNS = ["participant_id", "source_dataset", "event_id", "event_typ
 ATTR_COLUMNS = ["participant_id", "source_dataset", "concept", "value_num", "value_text", "unit", "raw_value",
                 "measured_at", "measured_at_raw", "quality_flags", "source_file", "source_row", "source_column"]
 STREAM_COLUMNS = ["participant_id", "source_dataset", "stream_id", "concept", "device", "declared_native_interval_s",
-                  "first_timestamp", "last_timestamp", "n_rows_source", "n_rows_output", "quality_flags"]
+                  "first_timestamp", "last_timestamp", "n_rows_source", "n_rows_output", "n_sampling_native",
+                  "n_sampling_interpolated", "n_sampling_unknown", "quality_flags"]
+DIAGNOSTIC_COLUMNS = ["participant_id", "stream_id", "transform", "key", "value"]
 REJECT_COLUMNS = ["source_dataset", "table", "source_file", "source_row", "record_scope", "participant_id", "reason",
                   "detail", "raw_record"]
 FILE_STAT_COLUMNS = ["table", "source_file", "n_physical_lines", "n_records", "n_blank_lines", "n_short_rows_padded",
@@ -115,6 +118,7 @@ class IngestResult:
     file_stats: pd.DataFrame
     column_resolution: pd.DataFrame
     unselected_values: pd.DataFrame
+    stream_diagnostics: pd.DataFrame
     transform_log: TransformLog
     input_files: list[Path]
     data_root: Path
@@ -157,6 +161,13 @@ class IngestResult:
                 for (t, r, s), n in res.groupby(["table", "role", "status"]).size().items()
             ] if len(res) else [],
             "transform_steps": len(self.transform_log.records),
+            "sampling_origin_by_stream": [
+                {k: (int(v) if k in ORIGIN_LABELS else v) for k, v in r.items()}
+                for r in origin_counts(obs).to_dict("records")],
+            "sampling_origin_evidence_by_stream": [
+                {k: (v if k == "stream_id" else int(v)) for k, v in r.items()}
+                for r in origin_evidence_counts(obs, self.transform_log.records).to_dict("records")],
+            "records_by_domain": domain_record_counts(self.concepts, obs, att, ev, self.config.event_domains()),
         }
 
 
@@ -261,7 +272,11 @@ def _json_row(row: pd.Series) -> str:
 
 
 def _same(a: pd.Series, b: pd.Series) -> pd.Series:
-    return (a == b) | (a.isna() & b.isna())
+    """Element-wise equality where null == null (safe for nullable dtypes, whose == yields <NA>)."""
+    eq = (a == b)
+    if isinstance(eq.dtype, pd.BooleanDtype):
+        eq = eq.fillna(False)
+    return eq.astype(bool) | (a.isna() & b.isna()).to_numpy()
 
 
 # =========================================================================== engine
@@ -277,6 +292,7 @@ class _Engine:
         self.file_stats: list[dict] = []
         self.rejected: list[dict] = []
         self.unselected: list[dict] = []  # filter-column values that no spec selects
+        self.diagnostics: list[dict] = []  # per participant x stream diagnostics recorded by transforms
         self.input_files: list[Path] = []
         self._steps: dict[str, _Step] = {}
         self._used_cols: set[str] = set()
@@ -568,6 +584,17 @@ class _Engine:
         for code in o.flags:
             self._count(self._step(f"{key}.static_flags", "static_flags", t.name, o.stream_id), n, n,
                         {code: _add_flag(flags, range(n), code)})
+        # sampling origin: unknown unless the configuration declares it with a basis
+        origin = pd.NA
+        if o.sampling_origin is not None:
+            origin = o.sampling_origin.value == "interpolated"
+            j = o.sampling_origin.justification
+            so = self._step(f"{key}.sampling_origin", "sampling_origin", t.name, o.stream_id,
+                            function="core.ingest.sampling_origin", basis=j.basis, evidence=j.evidence,
+                            assumption_ids=j.assumption_ids)
+            so.fixed_params["declared_origin"] = o.sampling_origin.value
+            so.notes.add("stream-level declaration; applies to every reading of the stream")
+            self._count(so, n, n)
         return pd.DataFrame({
             "participant_id": pid.loc[sub_idx].to_numpy(),
             "source_dataset": self.cfg.source,
@@ -577,7 +604,7 @@ class _Engine:
             "value": value.to_numpy(dtype=float),
             "unit": out_unit,
             "raw_value": raw.to_numpy(),
-            "is_interpolated": False,
+            "is_interpolated": pd.array([origin] * n, dtype="boolean"),
             "quality_flags": flags,
             "source_file": rel,
             "source_row": pf.lines.loc[sub_idx].to_numpy(),
@@ -849,6 +876,11 @@ class _Engine:
                 g = group.reset_index(drop=True)
                 ctx = TransformContext(self.cfg.source, pid, o.stream_id, o.concept)
                 res = fn(g.copy(), dict(tr.params), ctx)
+                if "is_interpolated" in res:
+                    res["is_interpolated"] = res["is_interpolated"].astype("boolean")
+                for k, v in ctx.diagnostics.items():
+                    self.diagnostics.append({"participant_id": pid, "stream_id": o.stream_id, "transform": tr.name,
+                                             "key": k, "value": None if v is None else str(v)})
                 removed, added = self._check_transform_output(tr, g, res)
                 for _, r in removed.iterrows():
                     self._reject(t, r["source_file"], r["source_row"], "removed_by_transform", json.dumps({
@@ -936,6 +968,7 @@ class _Engine:
             file_stats=pd.DataFrame(self.file_stats, columns=FILE_STAT_COLUMNS),
             column_resolution=self.resolution_frame(),
             unselected_values=self.unselected_frame(),
+            stream_diagnostics=pd.DataFrame(self.diagnostics, columns=DIAGNOSTIC_COLUMNS),
             transform_log=self.log, input_files=self.input_files, data_root=self.data_root,
             event_schema_fn=self.event_schema_fn,
         )
@@ -965,6 +998,9 @@ class _Engine:
                         "declared_native_interval_s": None if o.native_interval_s is None else float(o.native_interval_s),
                         "first_timestamp": g["timestamp"].min(), "last_timestamp": g["timestamp"].max(),
                         "n_rows_source": int(source_counts.get(pid, 0)), "n_rows_output": len(g),
+                        **{f"n_sampling_{k}": int(v) for k, v in
+                           origin_labels(g["is_interpolated"]).value_counts().reindex(
+                               list(ORIGIN_LABELS), fill_value=0).items()},
                         "quality_flags": [],
                     })
                 frames.append(frame)
@@ -1000,11 +1036,12 @@ def _typed(df: pd.DataFrame, columns: list[str], tz: str | None, ts_cols: list[s
     for c in float_cols:
         if c in df:
             df[c] = pd.to_numeric(df[c]).astype(float)
-    for c in ("source_row", "n_rows_source", "n_rows_output"):
+    for c in ("source_row", "n_rows_source", "n_rows_output", "n_sampling_native", "n_sampling_interpolated",
+              "n_sampling_unknown"):
         if c in df:
             df[c] = df[c].astype("Int64")
     if "is_interpolated" in df:
-        df["is_interpolated"] = df["is_interpolated"].astype(bool)
+        df["is_interpolated"] = df["is_interpolated"].astype("boolean")
     for c in columns:
         if df[c].dtype == object and c != "quality_flags":
             df[c] = df[c].where(df[c].notna(), None)
@@ -1043,7 +1080,7 @@ OUTPUT_FILES = (
     "observations.parquet", "events.parquet", "participant_attributes.parquet", "streams.parquet",
     "rejected_records.parquet", "ingest_summary.json", "ingestion_report.md",
     "_provenance/manifest.json", "_provenance/transform_log.jsonl", "_provenance/column_resolution.csv",
-    "_provenance/file_stats.csv", "_provenance/unselected_filter_values.csv",
+    "_provenance/file_stats.csv", "_provenance/unselected_filter_values.csv", "_provenance/stream_diagnostics.csv",
 )
 
 
@@ -1103,12 +1140,14 @@ def write_outputs(result: IngestResult, out_dir: str | Path, base_dir: str | Pat
     result.column_resolution.to_csv(prov / "column_resolution.csv", index=False)
     result.file_stats.to_csv(prov / "file_stats.csv", index=False)
     result.unselected_values.to_csv(prov / "unselected_filter_values.csv", index=False)
+    result.stream_diagnostics.to_csv(prov / "stream_diagnostics.csv", index=False)
     (out_dir / "ingest_summary.json").write_text(canonical_json(result.summary()) + "\n", encoding="utf-8")
     report = render_report(ReportContext.from_result(result, out_dir=out_dir, base_dir=base,
                                                      manifest=manifest.data, config_path=config_path))
     (out_dir / "ingestion_report.md").write_text(report, encoding="utf-8")
     for extra in ("_provenance/transform_log.jsonl", "_provenance/column_resolution.csv", "_provenance/file_stats.csv",
-                  "_provenance/unselected_filter_values.csv", "ingest_summary.json", "ingestion_report.md"):
+                  "_provenance/unselected_filter_values.csv", "_provenance/stream_diagnostics.csv",
+                  "ingest_summary.json", "ingestion_report.md"):
         manifest.add_output(out_dir / extra, relative_to=out_dir)
     manifest.write(prov / "manifest.json")
     return manifest.to_dict()
@@ -1122,7 +1161,7 @@ class IngestOutcome:
     error: str | None = None
 
 
-def ingest_and_write(config: SourceConfig | str | Path, concepts: ConceptRegistry | str | Path,
+def ingest_and_write(config: SourceConfig | str | Path, concepts: ConceptRegistry | str | Path | list,
                      data_root: str | Path, out_dir: str | Path, base_dir: str | Path, clock=_utc_now,
                      record_git: bool = True) -> IngestOutcome:
     """Run ingestion end to end and always leave an ``ingestion_report.md`` in ``out_dir``.
@@ -1142,7 +1181,7 @@ def ingest_and_write(config: SourceConfig | str | Path, concepts: ConceptRegistr
     engine = None
     try:
         cfg = config if isinstance(config, SourceConfig) else SourceConfig.from_yaml(config)
-        reg = concepts if isinstance(concepts, _CR) else _CR.from_yaml(concepts)
+        reg = concepts if isinstance(concepts, _CR) else _CR.from_yaml_files(concepts)
         engine = _Engine(cfg, Path(data_root), reg, clock)
         result = engine.run()
         write_outputs(result, out_dir, base_dir, clock=clock, record_git=record_git, config_path=config_path)

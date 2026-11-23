@@ -1,7 +1,7 @@
 """Command-line interface.
 
     pghd-ready ingest --source configs/sources/<source>.yaml \
-                      --concepts configs/conditions/<condition>.yaml \
+                      --concepts configs/concepts/shared.yaml configs/conditions/<condition>.yaml \
                       --data-root data/raw/<source> --out data/processed/<source>
 
 Exit codes: 0 = success, 0 = completed with warnings (see the report), 1 = failed.
@@ -37,7 +37,8 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command", required=True)
     p = sub.add_parser("ingest", help="Ingest a tabular source described by a YAML configuration.")
     p.add_argument("--source", required=True, type=Path, help="source configuration YAML")
-    p.add_argument("--concepts", required=True, type=Path, help="condition concept registry YAML")
+    p.add_argument("--concepts", required=True, type=Path, nargs="+",
+                   help="one or more concept registry YAML files (e.g. shared + condition); merged, conflicts fail")
     p.add_argument("--data-root", required=True, type=Path, help="directory containing the source files")
     p.add_argument("--out", required=True, type=Path, help="output directory (should be git-ignored)")
     p.add_argument("--base-dir", type=Path, default=Path.cwd(), help="base for relative paths in manifest and report")

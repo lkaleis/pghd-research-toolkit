@@ -36,6 +36,28 @@ class ValueType(str, Enum):
     CATEGORICAL = "categorical"  # stored in value_text
 
 
+# Conceptual PGHD domains. Descriptive, many-to-many metadata: a concept (or event type) may belong to
+# several domains or to none (e.g. demographics). They are not architectural boundaries.
+#
+# The vocabulary is deliberately FIXED IN CODE (here), so that typos such as "behavioral" fail loudly.
+# Adding a domain therefore requires a code change to this tuple (plus tests and documentation).
+# Making the vocabulary configurable is deferred until a real need arises.
+PGHD_DOMAINS = ("physiological", "behavioural", "medication", "patient_reported")
+
+
+def validate_domains(where: str, domains) -> tuple[str, ...]:
+    if domains is None:
+        return ()
+    if isinstance(domains, str) or not all(isinstance(d, str) for d in domains):
+        raise ConceptError(f"{where}: domains must be a list of strings.")
+    unknown = sorted(set(domains) - set(PGHD_DOMAINS))
+    if unknown:
+        raise ConceptError(f"{where}: unknown domain(s) {unknown}; allowed: {list(PGHD_DOMAINS)}.")
+    if len(set(domains)) != len(domains):
+        raise ConceptError(f"{where}: duplicate domains.")
+    return tuple(domains)
+
+
 @dataclass(frozen=True)
 class Concept:
     id: str
@@ -46,8 +68,10 @@ class Concept:
     # unit code -> multiplicative factor to canonical unit (substance-specific conversions)
     unit_conversions: Mapping[str, float] = field(default_factory=dict)
     references: Mapping[str, str] = field(default_factory=dict)
+    domains: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
+        validate_domains(f"Concept {self.id}", self.domains)
         if self.value_type is ValueType.CATEGORICAL and self.canonical_unit is not None:
             raise ConceptError(f"Concept {self.id}: categorical concepts have no unit.")
         if self.value_type is ValueType.NUMERIC and self.canonical_unit is None:
@@ -94,7 +118,10 @@ class ConceptRegistry:
                     canonical_unit=spec.pop("canonical_unit", None),
                     unit_conversions=dict(spec.pop("unit_conversions", None) or {}),
                     references=dict(spec.pop("references", None) or {}),
+                    domains=validate_domains(f"Concept {cid}", spec.pop("domains", None)),
                 )
+            except ConceptError:
+                raise
             except (KeyError, ValueError) as exc:
                 raise ConceptError(f"Concept {cid}: invalid definition ({exc}).") from exc
             if spec:
@@ -106,6 +133,28 @@ class ConceptRegistry:
     def from_yaml(cls, path: str | Path) -> "ConceptRegistry":
         with open(path, encoding="utf-8") as fh:
             return cls.from_mapping(yaml.safe_load(fh) or {})
+
+    @classmethod
+    def from_yaml_files(cls, paths) -> "ConceptRegistry":
+        """Load and merge several registries (e.g. shared + condition-specific).
+
+        A concept ID defined in more than one file must have identical definitions; otherwise loading fails.
+        """
+        if isinstance(paths, (str, Path)):
+            paths = [paths]
+        reg = cls()
+        for p in paths:
+            reg = reg.merge(cls.from_yaml(p))
+        return reg
+
+    def merge(self, other: "ConceptRegistry") -> "ConceptRegistry":
+        merged = ConceptRegistry(dict(self.concepts))
+        for c in other.concepts.values():
+            merged.add(c)
+        return merged
+
+    def domains_of(self, concept_id: str) -> tuple[str, ...]:
+        return self.concepts[concept_id].domains if concept_id in self.concepts else ()
 
     def add(self, concept: Concept) -> None:
         if concept.id in self.concepts and self.concepts[concept.id] != concept:
@@ -120,6 +169,24 @@ class ConceptRegistry:
 
     def __contains__(self, concept_id: str) -> bool:
         return concept_id in self.concepts
+
+
+def domain_record_counts(registry: "ConceptRegistry", observations: pd.DataFrame, attributes: pd.DataFrame,
+                         events: pd.DataFrame, event_domains: dict[str, tuple[str, ...]]) -> list[dict]:
+    """Records per PGHD domain and table. A record counts once under each of its domains; untagged
+    records are reported under domain None."""
+    rows = []
+    for table, df, key, lookup in (
+        ("observations", observations, "concept", registry.domains_of),
+        ("participant_attributes", attributes, "concept", registry.domains_of),
+        ("events", events, "event_type", lambda et: event_domains.get(et, ())),
+    ):
+        if not len(df):
+            continue
+        for value, n in df.groupby(key).size().items():
+            for d in (lookup(value) or (None,)):
+                rows.append({"domain": d, "table": table, key: value, "n": int(n)})
+    return rows
 
 
 def check_table_concepts(df: pd.DataFrame, registry: ConceptRegistry, kind: ConceptKind) -> list[str]:

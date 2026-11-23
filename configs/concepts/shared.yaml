@@ -1,0 +1,102 @@
+# Shared concept registry (v0.1): concepts that are not specific to any one condition.
+#
+# Load together with one or more condition registries, e.g.
+#   --concepts configs/concepts/shared.yaml configs/conditions/cardiometabolic.yaml
+# A concept ID may appear in several files only with an identical definition.
+#
+# Scope: only concepts needed by current sources. Add concepts when a source or task needs them.
+# Units are UCUM codes known to pghd_ready.core.units.
+#
+# domains: optional, descriptive, many-to-many tags from
+#   physiological | behavioural | medication | patient_reported
+# They are not architectural boundaries. Demographic attributes are deliberately untagged
+# (they describe the participant rather than being patient-generated health data).
+# The four-term vocabulary is fixed in code (pghd_ready.core.concepts.PGHD_DOMAINS); any other
+# value is rejected, and adding a domain requires a code change.
+#
+# references: orientation only; NOT verified mappings.
+
+registry: shared
+version: "0.1"
+
+concepts:
+  # ---------------------------------------------------------------- observations
+  heart_rate:
+    kind: observation
+    value_type: numeric
+    canonical_unit: /min
+    description: Heart rate in beats per minute as reported by a device for its epoch.
+    domains: [physiological]
+    references:
+      open_mhealth: "heart-rate schema - unverified"
+
+  physical_activity_met:
+    kind: observation
+    value_type: numeric
+    canonical_unit: "{MET}"
+    description: Metabolic equivalent of task for the device epoch (source encodings such as MET x 10 must be rescaled explicitly at ingestion).
+    domains: [behavioural]
+
+  activity_intensity_level:
+    kind: observation
+    value_type: ordinal
+    description: >-
+      Ordinal activity-intensity code reported by a device for its epoch. Level
+      semantics are source-defined; never pooled with physical_activity_met.
+    domains: [behavioural]
+
+  step_count:
+    kind: observation
+    value_type: numeric
+    canonical_unit: "{steps}"
+    description: Steps counted within the device epoch.
+    domains: [behavioural]
+    references:
+      open_mhealth: "step-count schema - unverified"
+
+  activity_energy_expenditure:
+    kind: observation
+    value_type: numeric
+    canonical_unit: kcal
+    description: Device-estimated energy expenditure within the device epoch.
+    domains: [behavioural, physiological]
+    references:
+      open_mhealth: "calories-burned schema - unverified"
+
+  # ---------------------------------------------------------------- attributes
+  age:
+    kind: attribute
+    value_type: numeric
+    canonical_unit: a
+    description: Age in years at study start.
+
+  sex:
+    kind: attribute
+    value_type: categorical
+    description: Sex/gender as recorded by the source (source coding preserved).
+
+  self_identified_race_ethnicity:
+    kind: attribute
+    value_type: categorical
+    description: Self-identified race/ethnicity as recorded by the source (labels preserved, not harmonised).
+
+  body_weight:
+    kind: attribute
+    value_type: numeric
+    canonical_unit: kg
+    description: Body weight (at study start unless a measurement time is given).
+    domains: [physiological]
+
+  body_height:
+    kind: attribute
+    value_type: numeric
+    canonical_unit: cm
+    description: Body height.
+    domains: [physiological]
+
+  body_mass_index:
+    kind: attribute
+    value_type: numeric
+    canonical_unit: kg/m2
+    description: Body mass index as reported by the source (not recomputed).
+    domains: [physiological]

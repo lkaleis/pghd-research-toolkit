@@ -1,18 +1,24 @@
-# Cardiometabolic concept registry (v0.1).
+# Cardiometabolic concept registry (v0.2).
 #
-# Scope: only concepts needed for the initial CGMacros ingestion (M1c) and the
-# planned synthetic app source. Add concepts when a source or task needs them.
+# Scope: concepts specific to cardiometabolic research that are needed by current
+# sources (CGMacros in M1c, the synthetic demo). Condition-independent concepts
+# (heart rate, activity, anthropometrics, demographics) live in
+# configs/concepts/shared.yaml; load both, e.g.
+#   --concepts configs/concepts/shared.yaml configs/conditions/cardiometabolic.yaml
 #
 # Units are UCUM codes known to pghd_ready.core.units.
 # unit_conversions: substance-specific factors (multiply a value in that unit by
 # the factor to obtain the canonical unit). Generic same-dimension conversions
 # (e.g. lb -> kg) come from the core unit table and are not repeated here.
 #
-# references: pointers to external standards for orientation only; they are
-# NOT verified mappings and are marked as such.
+# domains: optional, descriptive, many-to-many tags (see shared.yaml). Laboratory
+# values measured in a clinical setting are deliberately untagged: they are
+# clinical baseline data rather than patient-generated health data.
+#
+# references: orientation only; NOT verified mappings.
 
-condition: cardiometabolic
-version: "0.1"
+registry: cardiometabolic
+version: "0.2"
 
 concepts:
   # ---------------------------------------------------------------- observations
@@ -24,80 +30,22 @@ concepts:
       # 1 mmol/L glucose = 18.016 mg/dL (glucose molar mass 180.16 g/mol).
       mmol/L: 18.016
     description: Interstitial glucose measured by a continuous glucose monitor.
+    domains: [physiological]
     references:
       open_mhealth: "blood-glucose schema family (specimen source: interstitial fluid) - unverified"
 
-  heart_rate:
-    kind: observation
-    value_type: numeric
-    canonical_unit: /min
-    description: Heart rate in beats per minute as reported by a wearable for its epoch.
-    references:
-      open_mhealth: "heart-rate schema - unverified"
-
-  physical_activity_met:
-    kind: observation
-    value_type: numeric
-    canonical_unit: "{MET}"
-    description: Metabolic equivalent of task for the device epoch (source encodings such as MET x 10 must be rescaled explicitly at ingestion).
-
-  activity_intensity_level:
-    kind: observation
-    value_type: ordinal
-    description: >-
-      Ordinal activity-intensity code reported by a wearable for its epoch. Level
-      semantics are source-defined; never pooled with physical_activity_met.
-
-  step_count:
-    kind: observation
-    value_type: numeric
-    canonical_unit: "{steps}"
-    description: Steps counted within the device epoch.
-    references:
-      open_mhealth: "step-count schema - unverified"
-
-  activity_energy_expenditure:
-    kind: observation
-    value_type: numeric
-    canonical_unit: kcal
-    description: Device-estimated energy expenditure within the device epoch.
-    references:
-      open_mhealth: "calories-burned schema - unverified"
-
   # ---------------------------------------------------------------- attributes
-  age:
+  capillary_glucose:
     kind: attribute
     value_type: numeric
-    canonical_unit: a
-    description: Age in years at study start.
-
-  sex:
-    kind: attribute
-    value_type: categorical
-    description: Sex/gender as recorded by the source (source coding preserved).
-
-  self_identified_race_ethnicity:
-    kind: attribute
-    value_type: categorical
-    description: Self-identified race/ethnicity as recorded by the source (labels preserved, not harmonised).
-
-  body_weight:
-    kind: attribute
-    value_type: numeric
-    canonical_unit: kg
-    description: Body weight at study start.
-
-  body_height:
-    kind: attribute
-    value_type: numeric
-    canonical_unit: cm
-    description: Body height.
-
-  body_mass_index:
-    kind: attribute
-    value_type: numeric
-    canonical_unit: kg/m2
-    description: Body mass index as reported by the source (not recomputed).
+    canonical_unit: mg/dL
+    unit_conversions:
+      mmol/L: 18.016
+    description: >-
+      Fingerstick glucose. Stored as an attribute (not an observation) when the
+      measurement date cannot be resolved; the raw clock time is kept in
+      measured_at_raw.
+    domains: [physiological]
 
   hba1c:
     kind: attribute
@@ -162,14 +110,3 @@ concepts:
     value_type: numeric
     canonical_unit: "1"
     description: Total cholesterol to HDL ratio.
-
-  capillary_glucose:
-    kind: attribute
-    value_type: numeric
-    canonical_unit: mg/dL
-    unit_conversions:
-      mmol/L: 18.016
-    description: >-
-      Fingerstick glucose. Stored as an attribute (not an observation) when the
-      measurement date cannot be resolved; the raw clock time is kept in
-      measured_at_raw.

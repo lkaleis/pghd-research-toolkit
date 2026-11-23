@@ -1,7 +1,10 @@
 # Source configuration for the fictional "wearable_demo" dataset.
 #
 # Everything here is interpreted by the generic ingestion engine; no custom
-# Python code is used. Concepts come from configs/conditions/cardiometabolic.yaml.
+# Python code is used. Concepts come from configs/concepts/shared.yaml and
+# configs/conditions/cardiometabolic.yaml (pass both to --concepts).
+# Sampling origin: only the app export declares its readings native (documented
+# in the fictional dictionary); every other stream stays "unknown" by default.
 # All data, devices and the "data dictionary" referred to below are fictional.
 
 source: wearable_demo
@@ -66,6 +69,7 @@ tables:
          device: "Wristband W1 (fictional)", flags: [semantics_undocumented]}
     events:
       - event_type: meal
+        domains: [behavioural]
         when_present: [Meal]
         subtype:
           column: [Meal]
@@ -82,6 +86,7 @@ tables:
             rules: [{when: {outside: [0, 100]}, flag: amount_outside_documented_range}]
           image_ref: {column: [Photo], kind: text}
       - event_type: meal_photo
+        domains: [behavioural]
         when_present: [Photo]
         attributes:
           image_ref: {column: [Photo], kind: text}
@@ -98,6 +103,10 @@ tables:
         unit: mmol/L
         device: "Phone app (fictional)"
         where: {column: [type], equals: glucose}
+        sampling_origin:
+          value: native
+          basis: documented
+          evidence: "README.md, section 'Fictional data dictionary': each app export row is one reading as recorded, not interpolated"
 
   # ------------------------------------------------------------------ one row per participant
   - name: profile

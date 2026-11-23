@@ -18,7 +18,8 @@ basis in the transformation log.
 from __future__ import annotations
 
 import importlib
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, field
 from typing import Any, Callable
 
 import pandas as pd
@@ -30,10 +31,25 @@ class TransformError(RuntimeError):
 
 @dataclass(frozen=True)
 class TransformContext:
+    """Read-only facts about the group being transformed, plus a place to record diagnostics.
+
+    Transforms that infer something (e.g. a sampling-origin classification) should record their method,
+    evidence and confidence with :meth:`record`; the engine stores them per participant x stream in
+    ``stream_diagnostics`` and summarises them in the ingestion report.
+    """
+
     source: str
     participant_id: str
     stream_id: str
     concept: str
+    diagnostics: dict[str, Any] = field(default_factory=dict)
+
+    def record(self, key: str, value: Any) -> None:
+        if not re.fullmatch(r"[a-z][a-z0-9_]*", key):
+            raise TransformError(f"Diagnostic key {key!r} must be lower_snake_case.")
+        if value is not None and not isinstance(value, (str, int, float, bool)):
+            raise TransformError(f"Diagnostic {key!r} must be a scalar (str, int, float, bool or None).")
+        self.diagnostics[key] = value
 
 
 TransformFn = Callable[[pd.DataFrame, dict, TransformContext], pd.DataFrame]

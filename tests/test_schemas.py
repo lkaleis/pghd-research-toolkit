@@ -91,6 +91,22 @@ def test_schemas_do_not_reject_implausible_values():
     observation_schema().validate(obs, lazy=True)
 
 
+def test_is_interpolated_is_three_state():
+    obs = make_observations()
+    assert obs["is_interpolated"].isna().sum() == 1
+    observation_schema().validate(obs, lazy=True)
+    obs["is_interpolated"] = obs["is_interpolated"].astype(object)  # untyped object column is rejected
+    with pytest.raises(pe.SchemaErrors):
+        observation_schema().validate(obs, lazy=True)
+
+
+def test_stream_origin_counts_must_add_up():
+    st = make_streams()
+    st.loc[0, "n_sampling_unknown"] = 1
+    with pytest.raises(pe.SchemaErrors, match="must add up"):
+        stream_schema().validate(st, lazy=True)
+
+
 def test_event_attribute_silent_nulling_is_rejected():
     ev = make_events()
     for col in ["energy_kcal", "carbohydrate_g", "protein_g", "fat_g", "fiber_g", "sugar_g", "amount_consumed_raw"]:

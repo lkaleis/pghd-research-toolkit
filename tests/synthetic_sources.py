@@ -21,7 +21,9 @@ from pghd_ready.core.concepts import ConceptRegistry
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEMO_DIR = REPO_ROOT / "data" / "synthetic" / "wearable_demo"
 DEMO_CONFIG = DEMO_DIR / "config" / "source.yaml"
+SHARED_CONCEPTS = REPO_ROOT / "configs" / "concepts" / "shared.yaml"
 CARDIO_CONCEPTS = REPO_ROOT / "configs" / "conditions" / "cardiometabolic.yaml"
+CONCEPT_FILES = [SHARED_CONCEPTS, CARDIO_CONCEPTS]
 
 # table positions in the demo configuration
 DEVICE, APP, PROFILE = 0, 1, 2
@@ -36,6 +38,12 @@ TEST_ANNOTATIONS = {
     "flags": {
         "lattice_reading": {"category": "assumption_based", "description": "Kept as native reading.",
                             "assumption_id": "A-SYN-01"},
+        "inferred_native": {"category": "assumption_based", "assumption_id": "A-SYN-01",
+                            "description": "Classified as a native reading (inferred, not verified)."},
+        "inferred_interpolated": {"category": "assumption_based", "assumption_id": "A-SYN-01",
+                                  "description": "Classified as an interpolated value (inferred, not verified)."},
+        "origin_undetermined": {"category": "assumption_based", "assumption_id": "A-SYN-01",
+                                "description": "Classification attempted; evidence insufficient, origin left unknown."},
         "other_assumption_flag": {"category": "assumption_based", "description": "Unrelated assumption.",
                                   "assumption_id": "A-SYN-02"},
     },
@@ -43,7 +51,7 @@ TEST_ANNOTATIONS = {
 
 
 def concepts() -> ConceptRegistry:
-    return ConceptRegistry.from_yaml(CARDIO_CONCEPTS)
+    return ConceptRegistry.from_yaml_files(CONCEPT_FILES)
 
 
 def write_wide_source(root: Path) -> Path:

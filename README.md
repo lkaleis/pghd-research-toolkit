@@ -36,6 +36,21 @@ Where possible, new data sources should be integrated through declarative config
 
 This architecture is intended to allow researchers to reuse the same core functionality across datasets and health conditions, rather than rebuilding data preparation and quality-assessment workflows for each application.
 
+## PGHD Domains
+
+PGHD-Ready is intended as a cross-condition research framework rather than a toolkit for a single disease. It uses four broad, conceptual PGHD domains:
+
+| Domain | Examples |
+|---|---|
+| **Physiological** | Continuous and intermittent glucose, heart rate, blood pressure and other vital signs, weight and body composition, biomarkers from connected devices |
+| **Behavioural** | Meals and nutrition, physical activity and exercise, sleep, other behaviours captured by digital health apps and self-tracking tools |
+| **Medication-related** | Prescribed regimens, patient-reported medication-taking events, missed, delayed or skipped doses, dose timing and reasons for non-adherence |
+| **Patient-reported** | Symptoms and side effects, patient-reported outcomes and wellbeing, structured questionnaires, free-text journal entries |
+
+These domains are a way of describing the data, not separate software modules. A single data stream or event can belong to more than one domain. The shared core handles ingestion, standardisation, provenance, temporal alignment and baseline quality assessment in the same way across domains. Clinical concepts, derived measures, prediction tasks and analytical methods live in condition-specific modules.
+
+The project does not attempt to define a universal healthcare data model. New concepts are added through configuration and condition modules when a research question needs them.
+
 ## Initial Research Application
 
 The first implementation focuses on cardiometabolic health, using the CGMacros dataset to investigate how data quality, measurement characteristics, temporal alignment, and modality availability influence the reliability and predictive suitability of integrated PGHD.
@@ -44,7 +59,9 @@ A differently structured synthetic digital health dataset will subsequently be u
 
 ## Longer-Term Direction
 
-The longer-term ambition is to extend PGHD-Ready across multiple health domains, potentially including behavioral health, while maintaining a shared foundation for integrating and assessing heterogeneous patient-generated data.
+The longer-term ambition is to extend PGHD-Ready across multiple health domains, potentially including behavioral health (for example mood, sleep, symptoms, medication adherence and patient-reported outcomes), while maintaining a shared foundation for integrating and assessing heterogeneous patient-generated data.
+
+A planned future research question is whether patient-reported medication adherence data provides incremental predictive value for cardiometabolic outcomes when combined with physiological and behavioural PGHD. CGMacros does not contain medication or adherence records, so investigating this empirically will require a separate real-world dataset.
 
 By combining reusable data infrastructure with condition-specific research methods, the project aims to support more systematic and reproducible use of PGHD in real-world evidence generation and predictive healthcare research.
 
@@ -61,11 +78,44 @@ The toolkit aims to produce:
 
 ## Project Status
 
-**Early research and development.**
+**Early research and development.** This is an exploratory research initiative, not a clinically validated decision-support system.
 
-The initial dataset has been profiled and the architecture is being designed. Core functionality, validation, and research experiments will be developed incrementally.
+| Capability | Status |
+|---|---|
+| Common representation (observations, events, participant attributes, streams) with schema validation | Implemented |
+| Explicit annotation of documented issues, suspected anomalies, semantic ambiguities and assumptions | Implemented |
+| Three-state sampling origin per observation (native / interpolated / unknown, default unknown) with explicit inclusion policies | Implemented (representation only; no real-data classifier yet) |
+| Shared concept registry plus condition-specific registries, with optional many-to-many PGHD domain tags | Implemented (the four-term domain vocabulary is fixed in code; extending it requires a code change) |
+| Configuration-driven ingestion of delimited-text (CSV) sources, with provenance, rejected-record preservation and an analyst-readable ingestion report | Implemented, tested on a small synthetic example |
+| CGMacros ingestion | Planned (next milestone) |
+| Data-quality profiling (coverage, gaps, sampling, plausibility, cross-stream agreement) | Planned |
+| Temporal alignment and task-specific predictive-fitness assessment | Planned |
+| JSON, FHIR or open mHealth inputs; free-text sources | Not implemented |
+| Medication-related and patient-reported data representations | Not implemented (see roadmap) |
 
-This is an exploratory research initiative, not a clinically validated decision-support system.
+Roadmap (each step is reviewed before the next begins):
+
+1. **M1** Foundation, generic ingestion engine and CGMacros ingestion.
+2. **M2** Standalone data-quality profiling.
+3. **M3** Temporal alignment and task fitness.
+4. **M4** A second, differently structured synthetic source to test reuse.
+5. **M5** Initial experiment on how data limitations affect a predictive task.
+6. **M6** Medication adherence and multimodal PGHD: a medication event representation, prescribed regimens kept separate from patient-reported taking events, configurable ingestion of medication-tracking exports, and a synthetic adherence example.
+
+## Trying the ingestion engine
+
+A small, entirely fictional example dataset is included in `data/synthetic/wearable_demo/`. Its README documents each intentional data problem.
+
+```bash
+python -m venv .venv && .venv/bin/pip install -e ".[dev]"
+.venv/bin/pghd-ready ingest \
+  --source    data/synthetic/wearable_demo/config/source.yaml \
+  --concepts  configs/concepts/shared.yaml configs/conditions/cardiometabolic.yaml \
+  --data-root data/synthetic/wearable_demo/raw \
+  --out       data/processed/wearable_demo
+```
+
+The run writes standardised Parquet tables, detailed audit files and `ingestion_report.md`. The report explains in plain language what was read, mapped, transformed, flagged or rejected. A successful ingestion run does not mean the data are fit for any particular analysis.
 
 ## Guiding Principles
 

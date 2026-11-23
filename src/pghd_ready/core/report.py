@@ -29,7 +29,9 @@ import pandas as pd
 
 from .. import __version__
 from .annotations import AnnotationRegistry, IssueCategory
+from .concepts import domain_record_counts
 from .provenance import TransformRecord
+from .sampling import INTERPOLATED, NATIVE, UNKNOWN, origin_evidence_counts, origin_labels
 
 CATEGORY_TITLES = {
     IssueCategory.DOCUMENTED_ISSUE.value: "Documented issues",
@@ -77,6 +79,7 @@ OUTPUT_DESCRIPTIONS = [
     ("_provenance/column_resolution.csv", "which source column fed which role in every file"),
     ("_provenance/file_stats.csv", "per-file line, record, rejection and unused-column counts"),
     ("_provenance/unselected_filter_values.csv", "row-filter values that no configuration selected, per file"),
+    ("_provenance/stream_diagnostics.csv", "method, evidence and confidence recorded by transforms, per participant and stream"),
     ("_provenance/manifest.json", "input/output hashes, configuration hashes, versions"),
 ]
 
@@ -104,6 +107,8 @@ class ReportContext:
     log: list[TransformRecord] = field(default_factory=list)
     rejected: pd.DataFrame = field(default_factory=pd.DataFrame)
     unselected: pd.DataFrame = field(default_factory=pd.DataFrame)
+    diagnostics: pd.DataFrame = field(default_factory=pd.DataFrame)
+    concepts: Any = None
     tables: dict[str, pd.DataFrame] = field(default_factory=dict)
     outputs_written: bool = False
 
@@ -122,7 +127,8 @@ class ReportContext:
                   output_timezone=cfg.temporal.output_timezone, date_shifted=cfg.temporal.date_shifted,
                   temporal_notes=cfg.temporal.notes, config=cfg, registry=result.registry,
                   file_stats=result.file_stats, resolution=result.column_resolution, log=result.transform_log.records,
-                  rejected=result.rejected_records, unselected=result.unselected_values, outputs_written=True,
+                  rejected=result.rejected_records, unselected=result.unselected_values,
+                  diagnostics=result.stream_diagnostics, concepts=result.concepts, outputs_written=True,
                   tables={"observations": result.observations, "events": result.events,
                           "participant_attributes": result.participant_attributes, "streams": result.streams})
         ctx.data_root = ctx.rel(result.data_root)
@@ -155,6 +161,8 @@ class ReportContext:
             ctx.resolution = engine.resolution_frame()
             ctx.rejected = pd.DataFrame(engine.rejected)
             ctx.unselected = engine.unselected_frame()
+            ctx.diagnostics = pd.DataFrame(engine.diagnostics)
+            ctx.concepts = engine.concepts
         return ctx
 
 
@@ -247,6 +255,20 @@ def _role_target(ctx: ReportContext, role: str) -> tuple[str, str]:
     return role.replace("_", " "), "structural"
 
 
+def _origin_method(ctx: ReportContext, stream: str) -> str:
+    """Describe how a stream's sampling origin was determined, from the configuration and the log."""
+    parts = []
+    for r in ctx.log:
+        if r.target != stream:
+            continue
+        just = r.evidence or ", ".join(r.assumption_ids)
+        if r.operation == "sampling_origin":
+            parts.append(f"declared {r.params.get('declared_origin')} ({r.basis.value}: {just})")
+        elif r.operation == "transform":
+            parts.append(f"classified by `{r.function}` ({r.basis.value}: {just})")
+    return "; ".join(parts) or "not declared or classified - unknown by default"
+
+
 # =========================================================================== sections
 def render_report(ctx: ReportContext) -> str:
     status, reasons = determine_status(ctx)
@@ -322,6 +344,24 @@ def render_report(ctx: ReportContext) -> str:
             w(_table(["Stream", "Concept", "Unit", "Records", "Participants", "Value empty (raw kept)"],
                      [[s, c, ", ".join(sorted(map(str, x["unit"].dropna().unique()))) or "none", _n(len(x)),
                        _n(x["participant_id"].nunique()), _n(x["value"].isna().sum())] for (s, c), x in g]))
+        if len(obs):
+            w("**Sampling origin of observations** (`is_interpolated`: native = False, interpolated = True, "
+              "unknown = not declared or not classifiable). Unknown is the default; an origin is only native or "
+              "interpolated if the configuration declared it with a basis or a classification transform inferred it "
+              "(inferred classifications are assumption-based, not verified facts):\n")
+            counts = origin_evidence_counts(obs, ctx.log).set_index("stream_id")
+            w("Declared origins come from a configuration-level statement with a documented or assumption basis; "
+              "inferred origins come from a row-by-row classification transform. Both are admitted by "
+              "`native_only`, but they differ in evidence strength and should be distinguished in analyses:\n")
+            rows = []
+            for s, r in counts.iterrows():
+                row = [s, _n(r["native_declared"]), _n(r["native_inferred"]), _n(r["interpolated_declared"]),
+                       _n(r["interpolated_inferred"]), _n(r[UNKNOWN]), _origin_method(ctx, s)]
+                if r["unattributed"]:
+                    row[-1] += f"; {int(r['unattributed']):,} reading(s) with an origin but no recorded basis"
+                rows.append(row)
+            w(_table(["Stream", "Native (declared)", "Native (inferred)", "Interpolated (declared)",
+                      "Interpolated (inferred)", "Unknown", "How the origin was determined"], rows))
         ev = ctx.tables["events"]
         if len(ev):
             w("Events by type and subtype:\n")
@@ -335,6 +375,19 @@ def render_report(ctx: ReportContext) -> str:
                      [[c, ", ".join(sorted(map(str, x["unit"].dropna().unique()))) or "none", _n(len(x)),
                        _n((x["value_num"].isna() & x["value_text"].isna()).sum())]
                       for c, x in att.groupby("concept", sort=True)]))
+        if ctx.concepts is not None and ctx.config is not None:
+            dom = pd.DataFrame(domain_record_counts(ctx.concepts, obs, att, ev, ctx.config.event_domains()))
+            if len(dom):
+                w("**PGHD domains represented** (descriptive tags from the concept registries and event "
+                  "configuration; a record counts once under each of its domains, so rows do not sum to the totals):\n")
+                rows = []
+                for d, g in dom.groupby(dom["domain"].fillna("(untagged)"), sort=True):
+                    per = g.groupby("table")["n"].sum()
+                    items = sorted(set(g.get("concept", pd.Series(dtype=object)).dropna())
+                                   | set(g.get("event_type", pd.Series(dtype=object)).dropna()))
+                    rows.append([d, _n(per.get("observations", 0)), _n(per.get("events", 0)),
+                                 _n(per.get("participant_attributes", 0)), ", ".join(f"`{i}`" for i in items)])
+                w(_table(["Domain", "Observations", "Events", "Attributes", "Concepts / event types"], rows))
     else:
         w("_No standardised tables were produced._\n")
 
@@ -388,6 +441,24 @@ def render_report(ctx: ReportContext) -> str:
              [[r.table, r.target, r.function, r.basis.value, r.evidence or ", ".join(r.assumption_ids), _n(r.rows_in),
                _n(r.rows_out), ", ".join(f"{k}: {v:,}" for k, v in r.flags_raised.items()) or "none"]
               for r in by_op.get("transform", [])]))
+    w("**Sampling-origin declarations** (stream-level, from the configuration):\n")
+    w(_table(["Table", "Stream", "Declared origin", "Basis", "Justification", "Readings"],
+             [[r.table, r.target, r.params.get("declared_origin"), r.basis.value,
+               r.evidence or ", ".join(r.assumption_ids), _n(r.rows_out)] for r in by_op.get("sampling_origin", [])]))
+    diag = ctx.diagnostics
+    if len(diag):
+        w("**Transform diagnostics** (method, evidence and confidence recorded by transforms per participant and "
+          "stream; full detail in `_provenance/stream_diagnostics.csv`):\n")
+        rows = []
+        for (tr, s, k), g in diag.groupby(["transform", "stream_id", "key"], sort=True):
+            vals = pd.to_numeric(g["value"], errors="coerce")
+            if vals.notna().all():
+                summary = f"min {vals.min():g}, median {vals.median():g}, max {vals.max():g}"
+            else:
+                uniq = sorted(map(str, g["value"].dropna().unique()))
+                summary = ", ".join(uniq[:5]) + (f" (+{len(uniq) - 5} more)" if len(uniq) > 5 else "")
+            rows.append([f"`{tr}`", s, k, _n(len(g)), summary])
+        w(_table(["Transform", "Stream", "Diagnostic", "Participants", "Values"], rows))
     w("**Rules** (evaluated on the parsed source value, before scaling or unit conversion):\n")
     w(_table(["Table", "Target", "Condition", "Flag", "Category", "Action", "Records matched"],
              [[r.table, r.target, json.dumps(r.params.get("condition")), f"`{r.params.get('flag')}`",
@@ -560,6 +631,15 @@ def _interpretation(ctx: ReportContext, status: str, flagged: dict[str, Counter]
     if len(miss):
         b.append(f"{miss['role'].nunique()} optional field(s) are missing in some files, so the available variables "
                  "differ between participants. Check whether this restricts the planned analysis.")
+    obs = ctx.tables.get("observations")
+    if obs is not None and len(obs):
+        labels = origin_labels(obs["is_interpolated"]).value_counts()
+        n_unk, n_int = int(labels.get(UNKNOWN, 0)), int(labels.get(INTERPOLATED, 0))
+        if n_unk or n_int:
+            b.append(f"Sampling origin: {int(labels.get(NATIVE, 0)):,} observation(s) are native, {n_int:,} "
+                     f"interpolated and {n_unk:,} of unknown origin (section 4). Downstream analyses must choose an "
+                     "explicit inclusion policy (native only, native and unknown, or all) and should report "
+                     "sensitivity across policies; interpolated values are not measurements.")
     if len(ctx.unselected):
         vals = ", ".join(sorted(f"'{v}'" for v in ctx.unselected["value"].unique()))
         b.append(f"Some rows were not selected by any row filter (values {vals}; section 7). Confirm these "

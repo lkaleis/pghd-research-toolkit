@@ -96,6 +96,38 @@ _RULE_OPS = {"equals", "in", "below", "above", "outside"}
 
 
 @dataclass(frozen=True)
+class SamplingOriginSpec:
+    """Declared sampling origin of every reading in a stream.
+
+    Without a declaration, ``is_interpolated`` is *unknown* (null). A declaration sets it for the whole
+    stream and must be justified (documented with evidence, or assumption with assumption_ids).
+    Per-reading classification (e.g. inferring interpolated readings) is the job of a named transform.
+    """
+
+    value: str  # "native" | "interpolated"
+    justification: BasisSpec
+
+    @classmethod
+    def parse(cls, where: str, spec: Mapping[str, Any]) -> "SamplingOriginSpec":
+        _check_keys(where, spec, {"value", "basis", "evidence", "assumption_ids"}, {"value", "basis"})
+        if spec["value"] not in ("native", "interpolated"):
+            raise ConfigError(f"{where}: value must be 'native' or 'interpolated' (omit the key for unknown).")
+        just = BasisSpec.parse(where, spec)
+        if just.basis is TransformBasis.STRUCTURAL:
+            raise ConfigError(f"{where}: a sampling-origin declaration needs basis 'documented' or 'assumption'.")
+        return cls(spec["value"], just)
+
+
+def _domains(where: str, value: Any) -> tuple[str, ...]:
+    from .concepts import ConceptError, validate_domains
+
+    try:
+        return validate_domains(where, value)
+    except ConceptError as exc:
+        raise ConfigError(str(exc)) from exc
+
+
+@dataclass(frozen=True)
 class RuleSpec:
     """Flag values meeting a condition. Evaluated on the parsed *source* value (before scaling/units)."""
 
@@ -169,13 +201,14 @@ class ObservationSpec:
     rules: tuple[RuleSpec, ...] = ()
     flags: tuple[str, ...] = ()
     transforms: tuple[TransformSpec, ...] = ()
+    sampling_origin: SamplingOriginSpec | None = None
 
     @classmethod
     def parse(cls, where: str, spec: Mapping[str, Any]) -> "ObservationSpec":
         _check_keys(
             where, spec,
             {"stream_id", "concept", "column", "unit", "required", "device", "native_interval_s", "where",
-             "scale", "rules", "flags", "transforms"},
+             "scale", "rules", "flags", "transforms", "sampling_origin"},
             {"stream_id", "concept", "column"},
         )
         w = f"{where}[{spec['stream_id']}]"
@@ -193,6 +226,8 @@ class ObservationSpec:
             flags=tuple(spec.get("flags") or ()),
             transforms=tuple(TransformSpec.parse(f"{w}.transforms[{i}]", t)
                              for i, t in enumerate(spec.get("transforms") or [])),
+            sampling_origin=SamplingOriginSpec.parse(f"{w}.sampling_origin", spec["sampling_origin"])
+            if spec.get("sampling_origin") else None,
         )
 
 
@@ -244,10 +279,11 @@ class EventSpec:
     subtype: CategoryMapSpec | None = None
     attributes: tuple[EventAttributeSpec, ...] = ()
     flags: tuple[str, ...] = ()
+    domains: tuple[str, ...] = ()  # descriptive PGHD domain tags (many-to-many)
 
     @classmethod
     def parse(cls, where: str, spec: Mapping[str, Any]) -> "EventSpec":
-        _check_keys(where, spec, {"event_type", "when_present", "where", "subtype", "attributes", "flags"},
+        _check_keys(where, spec, {"event_type", "when_present", "where", "subtype", "attributes", "flags", "domains"},
                     {"event_type", "when_present"})
         w = f"{where}[{spec['event_type']}]"
         return cls(
@@ -258,6 +294,7 @@ class EventSpec:
             attributes=tuple(EventAttributeSpec.parse(f"{w}.attributes.{k}", k, v)
                              for k, v in (spec.get("attributes") or {}).items()),
             flags=tuple(spec.get("flags") or ()),
+            domains=_domains(f"{w}.domains", spec.get("domains")),
         )
 
 
@@ -426,6 +463,12 @@ class SourceConfig:
         names = [t.name for t in tables]
         if len(set(names)) != len(names):
             raise ConfigError("table names must be unique.")
+        ev_domains: dict[str, tuple[str, ...]] = {}
+        for t in tables:
+            for e in t.events:
+                if e.event_type in ev_domains and ev_domains[e.event_type] != e.domains:
+                    raise ConfigError(f"event_type {e.event_type!r} is declared with different domains in two places.")
+                ev_domains[e.event_type] = e.domains
         streams = [o.stream_id for t in tables for o in t.observations]
         if len(set(streams)) != len(streams):
             raise ConfigError("stream_id values must be unique across the source.")
@@ -461,6 +504,9 @@ class SourceConfig:
                 codes |= set(a.flags) | {r.flag for r in a.rules}
         return codes
 
+    def event_domains(self) -> dict[str, tuple[str, ...]]:
+        return {e.event_type: e.domains for t in self.tables for e in t.events}
+
     def referenced_assumptions(self) -> set[str]:
         ids: set[str] = set()
         for t in self.tables:
@@ -469,6 +515,8 @@ class SourceConfig:
             for o in t.observations:
                 if o.scale:
                     ids |= set(o.scale.justification.assumption_ids)
+                if o.sampling_origin:
+                    ids |= set(o.sampling_origin.justification.assumption_ids)
                 for tr in o.transforms:
                     ids |= set(tr.justification.assumption_ids)
         return ids

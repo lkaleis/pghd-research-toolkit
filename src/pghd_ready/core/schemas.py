@@ -35,7 +35,7 @@ REJECTION_REASONS = (
     "removed_by_transform",  # observation removed by a configured named transform
 )
 
-SCHEMA_VERSION = "0.1"
+SCHEMA_VERSION = "0.2"  # 0.2: nullable three-state is_interpolated; streams sampling-origin counts
 
 
 def _is_flag_list(value) -> bool:
@@ -132,7 +132,9 @@ def observation_schema(tz: str | None = None) -> pa.DataFrameSchema:
             "value": pa.Column(float, nullable=True),
             "unit": pa.Column(str, nullable=True),
             "raw_value": pa.Column(str, nullable=True),
-            "is_interpolated": pa.Column(bool, nullable=False),
+            # three-state sampling origin: False = native, True = interpolated, <NA> = unknown (default);
+            # see pghd_ready.core.sampling
+            "is_interpolated": pa.Column("boolean", nullable=True),
             "quality_flags": _flags_column(),
             **_lineage_columns(),
         },
@@ -210,9 +212,17 @@ def stream_schema(tz: str | None = None) -> pa.DataFrameSchema:
             "last_timestamp": pa.Column(ts, nullable=True),
             "n_rows_source": pa.Column("Int64", nullable=False, checks=pa.Check.ge(0)),
             "n_rows_output": pa.Column("Int64", nullable=False, checks=pa.Check.ge(0)),
+            # sampling-origin counts of the output rows (native / interpolated / unknown)
+            "n_sampling_native": pa.Column("Int64", nullable=False, checks=pa.Check.ge(0)),
+            "n_sampling_interpolated": pa.Column("Int64", nullable=False, checks=pa.Check.ge(0)),
+            "n_sampling_unknown": pa.Column("Int64", nullable=False, checks=pa.Check.ge(0)),
             "quality_flags": _flags_column(),
         },
-        checks=[_participant_prefix_check()],
+        checks=[
+            _participant_prefix_check(),
+            pa.Check(lambda df: df["n_sampling_native"] + df["n_sampling_interpolated"] + df["n_sampling_unknown"]
+                     == df["n_rows_output"], error="sampling-origin counts must add up to n_rows_output"),
+        ],
         unique=["participant_id", "stream_id"],
         strict=True,
         ordered=False,
