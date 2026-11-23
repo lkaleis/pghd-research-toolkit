@@ -45,6 +45,7 @@ def make_events(tz: str | None = None) -> pd.DataFrame:
             "raw_label": ["Breakfast", "brunch?"],
             "start_time": pd.to_datetime(["2000-01-01 08:00", "2000-01-01 11:00"]).tz_localize(tz).as_unit("ns"),
             "end_time": pd.to_datetime([None, None]).tz_localize(tz).as_unit("ns"),
+            "raw_attributes": [None, None],
             "quality_flags": [[], ["unmapped_meal_label"]],
             "source_file": ["export/food.csv"] * 2,
             "source_row": pd.array([1, 2], dtype="Int64"),

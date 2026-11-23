@@ -16,6 +16,9 @@ dependencies = [
     "pandera>=0.20",
 ]
 
+[project.scripts]
+pghd-ready = "pghd_ready.cli:main"
+
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
 

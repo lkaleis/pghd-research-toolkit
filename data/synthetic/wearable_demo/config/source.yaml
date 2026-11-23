@@ -1,0 +1,114 @@
+# Source configuration for the fictional "wearable_demo" dataset.
+#
+# Everything here is interpreted by the generic ingestion engine; no custom
+# Python code is used. Concepts come from configs/conditions/cardiometabolic.yaml.
+# All data, devices and the "data dictionary" referred to below are fictional.
+
+source: wearable_demo
+version: "1.0"
+description: >-
+  Fictional wearable + app export with deliberately heterogeneous files, used to
+  demonstrate and test configuration-driven ingestion.
+
+temporal:
+  output_timezone: UTC
+  date_shifted: false
+  notes: Device export uses local clock time without offsets; app export uses ISO-8601 with UTC offsets.
+
+event_schema: pghd_ready.conditions.cardiometabolic.schemas:meal_event_schema
+
+annotations:
+  assumptions:
+    A-DEMO-TZ-01:
+      statement: Device export timestamps are local clock time in Europe/Berlin.
+      rationale: >-
+        The fictional device export carries no timezone information; the demo study
+        site is assumed to be in Berlin. Confirm with the data provider.
+  flags:
+    documented_error_code:
+      category: documented_issue
+      action: set_null
+      description: Value documented by the source as an error code (LDL = 999).
+      evidence: "README.md, section 'Fictional data dictionary': LDL value 999 means 'calculation error'"
+    amount_outside_documented_range:
+      category: semantic_ambiguity
+      description: Amount consumed outside the documented 0-100 % range; meaning unclear (percent? servings?).
+    semantics_undocumented:
+      category: semantic_ambiguity
+      description: Field is not described in the data dictionary; values are stored but not interpreted.
+
+tables:
+  # ------------------------------------------------------------------ wide per-participant device files
+  - name: device_export
+    files: {glob: "device_export/user_*/user_*.csv"}
+    participant_id: {from: path, regex: 'user_(\d+)/', format: "{0:0>3}"}
+    read: {encoding: utf-8-sig, drop_columns: ["Unnamed: 0"]}
+    timestamp:
+      column: [Timestamp]
+      format: "%Y-%m-%d %H:%M:%S"
+      assume_timezone: Europe/Berlin
+      basis: assumption
+      assumption_ids: [A-DEMO-TZ-01]
+    observations:
+      - {stream_id: patch_a, concept: glucose_interstitial, column: ["Sensor A"], unit: mg/dL, required: true,
+         device: "Patch sensor A (fictional)", native_interval_s: 60}
+      - {stream_id: patch_b, concept: glucose_interstitial, column: ["Sensor B"], unit: mg/dL,
+         device: "Patch sensor B (fictional)"}
+      - {stream_id: wrist_hr, concept: heart_rate, column: [HR, Heart Rate], unit: /min, device: "Wristband W1 (fictional)"}
+      - stream_id: wrist_met
+        concept: physical_activity_met
+        column: ["Activity x10"]
+        unit: "{MET}"
+        device: "Wristband W1 (fictional)"
+        scale: {factor: 0.1, basis: documented,
+                evidence: "README.md, section 'Fictional data dictionary': 'Activity x10' is MET multiplied by 10"}
+      - {stream_id: wrist_intensity, concept: activity_intensity_level, column: [Intensity],
+         device: "Wristband W1 (fictional)", flags: [semantics_undocumented]}
+    events:
+      - event_type: meal
+        when_present: [Meal]
+        subtype:
+          column: [Meal]
+          map:
+            breakfast: [Breakfast, breakfast]
+            lunch: [Lunch, lunch]
+            dinner: [Dinner, dinner]
+            snack: [Snack, snack]
+        attributes:
+          energy_kcal: {column: [Kcal], unit: kcal}
+          carbohydrate_g: {column: [Carbs], unit: g}
+          amount_consumed_raw:
+            column: [Amount]
+            rules: [{when: {outside: [0, 100]}, flag: amount_outside_documented_range}]
+          image_ref: {column: [Photo], kind: text}
+      - event_type: meal_photo
+        when_present: [Photo]
+        attributes:
+          image_ref: {column: [Photo], kind: text}
+
+  # ------------------------------------------------------------------ long-format phone app export
+  - name: app_export
+    files: {path: app_export/app_glucose.csv}
+    participant_id: {from: column, column: [user], format: "{0:0>3}"}
+    timestamp: {column: [recorded_at], format: ISO8601}
+    observations:
+      - stream_id: app_glucose
+        concept: glucose_interstitial
+        column: [value]
+        unit: mmol/L
+        device: "Phone app (fictional)"
+        where: {column: [type], equals: glucose}
+
+  # ------------------------------------------------------------------ one row per participant
+  - name: profile
+    files: {path: profile.csv}
+    participant_id: {from: column, column: [subject], format: "{0:0>3}"}
+    attributes:
+      - {concept: body_weight, column: ["Weight (lb)"], unit: "[lb_av]"}
+      - {concept: body_height, column: [Height], unit: "[in_i]"}
+      - {concept: sex, column: [Sex]}
+      - concept: ldl_cholesterol_calculated
+        column: [LDL]
+        unit: mg/dL
+        rules: [{when: {equals: 999}, flag: documented_error_code}]
+      - {concept: capillary_glucose, column: [Fingerstick], unit: mg/dL, measured_at_raw: [Time.1]}

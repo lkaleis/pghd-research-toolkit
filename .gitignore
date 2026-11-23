@@ -226,7 +226,9 @@ __marimo__/
 # Research datasets - never push raw or processed data
 data/raw/
 data/processed/
-data/synthetic/
+data/synthetic/*
+# ...except the small, hand-written, fully fictional demo dataset (no participant data)
+!data/synthetic/wearable_demo/
 
 # Private project documentation
 PROJECT_BRIEF.md

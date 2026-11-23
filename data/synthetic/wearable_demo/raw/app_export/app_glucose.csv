@@ -1,0 +1,9 @@
+recorded_at,user,type,value
+2000-01-01T07:05:00Z,1,glucose,5.6
+2000-01-01T08:10:00+01:00,1,glucose,5.9
+2000-01-01T07:15:00Z,1,steps,120
+2000-02-01T11:05:00Z,2,Glucose,5.1
+2000-02-01T11:10:00Z,2,glucose,LOW
+2000-03-01T17:05:00Z,3,glucose,7.2
+,3,glucose,7.4
+2000-03-01T17:20:00Z,,glucose,7.5

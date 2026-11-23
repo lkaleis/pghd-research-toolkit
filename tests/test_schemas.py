@@ -91,6 +91,22 @@ def test_schemas_do_not_reject_implausible_values():
     observation_schema().validate(obs, lazy=True)
 
 
+def test_event_attribute_silent_nulling_is_rejected():
+    ev = make_events()
+    for col in ["energy_kcal", "carbohydrate_g", "protein_g", "fat_g", "fiber_g", "sugar_g", "amount_consumed_raw"]:
+        ev[col] = [450.0, None]
+    ev["image_ref"] = [None, None]
+    ev.at[0, "raw_attributes"] = '{"energy_kcal": "450", "carbohydrate_g": "n/a"}'
+    ev["carbohydrate_g"] = [float("nan"), float("nan")]  # raw "n/a" exists, value empty, no flag on row 0
+    with pytest.raises(pe.SchemaErrors, match="silent nulling"):
+        meal_event_schema().validate(ev, lazy=True)
+    ev.at[0, "quality_flags"] = ["unparseable_numeric"]
+    meal_event_schema().validate(ev, lazy=True)
+    ev.at[1, "raw_attributes"] = "not json"
+    with pytest.raises(pe.SchemaErrors, match="JSON object"):
+        meal_event_schema().validate(ev, lazy=True)
+
+
 def test_meal_event_schema_extends_core_events():
     ev = make_events()
     for col in ["energy_kcal", "carbohydrate_g", "protein_g", "fat_g", "fiber_g", "sugar_g", "amount_consumed_raw"]:

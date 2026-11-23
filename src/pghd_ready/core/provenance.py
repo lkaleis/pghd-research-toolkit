@@ -85,6 +85,10 @@ class TransformRecord:
     flags_raised: dict[str, int] = field(default_factory=dict)
     notes: str | None = None
     recorded_at: str | None = None
+    # structured context (optional) so reports need not parse step names
+    operation: str | None = None  # e.g. "unit_conversion", "scale", "rule", "transform"
+    table: str | None = None  # configured source table
+    target: str | None = None  # stream / concept / event attribute affected
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
@@ -112,6 +116,9 @@ class TransformLog:
         evidence: str | None = None,
         flags_raised: Mapping[str, int] | None = None,
         notes: str | None = None,
+        operation: str | None = None,
+        table: str | None = None,
+        target: str | None = None,
     ) -> TransformRecord:
         basis = TransformBasis(basis)
         assumption_ids = list(assumption_ids or [])
@@ -140,6 +147,9 @@ class TransformLog:
             flags_raised={k: int(v) for k, v in (flags_raised or {}).items()},
             notes=notes,
             recorded_at=self.clock().isoformat(),
+            operation=operation,
+            table=table,
+            target=target,
         )
         self.records.append(rec)
         return rec
@@ -169,12 +179,13 @@ class RunManifest:
             "annotations": {},
         }
 
-    def _rel(self, path: str | Path) -> str:
+    def _rel(self, path: str | Path, relative_to: str | Path | None = None) -> str:
         p = Path(path).resolve()
+        root = Path(relative_to).resolve() if relative_to is not None else self.base_dir
         try:
-            return p.relative_to(self.base_dir).as_posix()
+            return p.relative_to(root).as_posix()
         except ValueError as exc:
-            raise ValueError(f"{p} is outside the manifest base directory {self.base_dir}.") from exc
+            raise ValueError(f"{p} is outside the manifest base directory {root}.") from exc
 
     def add_config(self, name: str, config: Any) -> str:
         h = config_hash(config)
@@ -187,15 +198,17 @@ class RunManifest:
     def set_annotations(self, registry: AnnotationRegistry) -> None:
         self.data["annotations"] = registry.to_dict()
 
-    def add_input(self, path: str | Path) -> dict[str, Any]:
+    def add_input(self, path: str | Path, relative_to: str | Path | None = None) -> dict[str, Any]:
+        """Record an input file; its path is stored relative to ``relative_to`` (default: base_dir)."""
         p = Path(path)
-        entry = {"path": self._rel(p), "sha256": sha256_file(p), "bytes": p.stat().st_size}
+        entry = {"path": self._rel(p, relative_to), "sha256": sha256_file(p), "bytes": p.stat().st_size}
         self.data["inputs"].append(entry)
         return entry
 
-    def add_output(self, path: str | Path, table: str | None = None, rows: int | None = None) -> dict[str, Any]:
+    def add_output(self, path: str | Path, table: str | None = None, rows: int | None = None,
+                   relative_to: str | Path | None = None) -> dict[str, Any]:
         p = Path(path)
-        entry = {"path": self._rel(p), "table": table, "rows": rows, "sha256": sha256_file(p)}
+        entry = {"path": self._rel(p, relative_to), "table": table, "rows": rows, "sha256": sha256_file(p)}
         self.data["outputs"].append(entry)
         return entry
 

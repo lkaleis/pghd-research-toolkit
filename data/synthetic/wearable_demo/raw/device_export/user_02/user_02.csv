@@ -1,0 +1,6 @@
+Timestamp,Sensor B,Sensor A,Heart Rate,Intensity,Meal,Kcal,Carbs,Photo
+2000-02-01 12:00:00,90,95,70,0,lunch,600,80,photos/c.jpg
+2000-02-01 12:01:00,,96,71,1,,,,
+2000-02-01 12:02:00,91,97,72,3,,,,
+2000-03-26 02:30:00,92,98,73,1,,,,
+2000-02-01 18:30:00,,,,,Dinner,about 700,90,

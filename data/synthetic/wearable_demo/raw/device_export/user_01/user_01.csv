@@ -1,0 +1,9 @@
+﻿Unnamed: 0,Timestamp,Sensor A,Sensor B ,HR,Activity x10,Meal,Kcal,Carbs,Amount,Photo,Note
+0,2000-01-01 08:00:00,100,110,60,10,Breakfast,400,50,100,photos/a.jpg,
+1,2000-01-01 08:01:00,101,,61,12,,,,,,
+2,2000-01-01 08:02:00,102,,62,15,,,,,photos/b.jpg,"sensor re-applied
+after shower"
+3,2000-01-01 08:03:00,103,112,,11,snack,150,20,300,,
+
+4,,104,,63,11,,,,,,missing timestamp
+5,2000-01-01 08:05:00,105,,64,11,,,,,,extra,field

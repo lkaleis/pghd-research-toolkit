@@ -8,14 +8,32 @@ being silently fixed.
 
 All timestamps in one table share one temporal policy: either naive local clock
 time (``tz=None``) or timezone-aware time in a single zone (e.g. ``"UTC"``).
+
+Lineage convention: ``source_file`` is the path relative to the source's data
+root and ``source_row`` is the **1-based physical line number** in that file at
+which the source record starts (the header is line 1). Blank lines and quoted
+fields spanning several lines are accounted for, so ``source_row`` can be used
+to open the file at the right line.
 """
 
 from __future__ import annotations
+
+import json
 
 import pandas as pd
 import pandera.pandas as pa
 
 from .annotations import FLAG_CODE_PATTERN
+
+REJECTION_REASONS = (
+    "field_count_mismatch",  # more fields than header columns; cannot be mapped to columns
+    "empty_row",  # every field empty
+    "missing_participant_id",
+    "missing_timestamp",
+    "unparseable_timestamp",
+    "timestamp_dst_unresolvable",  # local time ambiguous/nonexistent at a DST change
+    "removed_by_transform",  # observation removed by a configured named transform
+)
 
 SCHEMA_VERSION = "0.1"
 
@@ -74,6 +92,34 @@ def _no_silent_nulling_check(value_columns: list[str]) -> pa.Check:
     return pa.Check(check, error="value nulled without a quality flag (silent nulling is not allowed)")
 
 
+def _event_raw_preserved_check() -> pa.Check:
+    """An event attribute that had a raw value but is null in the table must be explained by a flag."""
+
+    def check(df: pd.DataFrame) -> pd.Series:
+        ok = []
+        for raw, flags, (_, row) in zip(df["raw_attributes"], df["quality_flags"], df.iterrows()):
+            if raw is None or (isinstance(raw, float) and pd.isna(raw)) or flags:
+                ok.append(True)
+                continue
+            attrs = json.loads(raw)
+            ok.append(all(v is None or k not in row.index or pd.notna(row[k]) for k, v in attrs.items()))
+        return pd.Series(ok, index=df.index, dtype=bool)
+
+    return pa.Check(check, error="event attribute nulled without a quality flag (silent nulling is not allowed)")
+
+
+def _json_object_column(nullable: bool) -> pa.Column:
+    def is_obj(v) -> bool:
+        if v is None:
+            return nullable
+        try:
+            return isinstance(json.loads(v), dict)
+        except (TypeError, ValueError):
+            return False
+
+    return pa.Column(object, nullable=nullable, checks=pa.Check(lambda s: s.map(is_obj), error="must be a JSON object"))
+
+
 def observation_schema(tz: str | None = None) -> pa.DataFrameSchema:
     """Time-stamped measurements, one row per stream reading."""
     return pa.DataFrameSchema(
@@ -111,10 +157,12 @@ def event_schema(tz: str | None = None) -> pa.DataFrameSchema:
             "raw_label": pa.Column(str, nullable=True),
             "start_time": pa.Column(ts, nullable=False),
             "end_time": pa.Column(ts, nullable=True),
+            # JSON object {attribute: original source text or null} for every configured attribute
+            "raw_attributes": _json_object_column(nullable=True),
             "quality_flags": _flags_column(),
             **_lineage_columns(with_column=False),
         },
-        checks=[_participant_prefix_check()],
+        checks=[_participant_prefix_check(), _event_raw_preserved_check()],
         strict=True,
         ordered=False,
         name="events",
@@ -173,9 +221,36 @@ def stream_schema(tz: str | None = None) -> pa.DataFrameSchema:
     )
 
 
+def rejected_record_schema(tz: str | None = None) -> pa.DataFrameSchema:
+    """Audit table of source records (or derived observations) that could not be kept, with their content.
+
+    ``record_scope`` is ``source_row`` when ``raw_record`` holds the complete original row
+    ({column: text}), or ``observation`` when it holds an observation removed by a transform.
+    ``tz`` is accepted for a uniform schema-factory signature; this table has no timestamp columns.
+    """
+    return pa.DataFrameSchema(
+        columns={
+            "source_dataset": _non_empty_str(),
+            "table": _non_empty_str(),
+            "source_file": _non_empty_str(),
+            "source_row": pa.Column("Int64", nullable=True),
+            "record_scope": pa.Column(str, checks=pa.Check.isin(["source_row", "observation"])),
+            "participant_id": pa.Column(str, nullable=True),
+            "reason": pa.Column(str, checks=pa.Check.isin(list(REJECTION_REASONS))),
+            "detail": pa.Column(str, nullable=True),
+            "raw_record": _json_object_column(nullable=False),
+        },
+        strict=True,
+        ordered=False,
+        name="rejected_records",
+        metadata={"pghd_table": "rejected_records", "schema_version": SCHEMA_VERSION, "tz": tz},
+    )
+
+
 TABLE_SCHEMAS = {
     "observations": observation_schema,
     "events": event_schema,
     "participant_attributes": participant_attribute_schema,
     "streams": stream_schema,
+    "rejected_records": rejected_record_schema,
 }
