@@ -117,6 +117,33 @@ python -m venv .venv && .venv/bin/pip install -e ".[dev]"
 
 The run writes standardised Parquet tables, detailed audit files and `ingestion_report.md`. The report explains in plain language what was read, mapped, transformed, flagged or rejected. A successful ingestion run does not mean the data are fit for any particular analysis.
 
+## Development and Tests
+
+```bash
+python -m venv .venv && .venv/bin/pip install -r requirements.txt -e ".[dev]"
+env -u PYTHONPATH .venv/bin/python -m pytest
+```
+
+- The synthetic tests always run. They use only the fictional `data/synthetic/wearable_demo` dataset and data generated inside the tests.
+- **Real-data reconciliation tests** (`tests/test_cgmacros_real.py`, marker `real_data`) also run by default, but only where CGMacros is available locally. Without it they are reported as skipped, so the suite passes on any machine.
+- These tests compare the ingestion engine with an independent reference profiler (`tests/cgmacros_reference.py`). Their assertions and failure messages are aggregate-only. With the data present they add roughly 40 seconds.
+- Run only them with `pytest -m real_data`, or exclude them with `pytest -m "not real_data"`.
+
+**The CGMacros dataset is not included in this repository and must never be committed.** To run the real-data tests or the CGMacros ingestion locally:
+
+1. Download CGMacros v1.0.0 from PhysioNet (https://doi.org/10.13026/3z8q-x658) under its CC BY-NC-SA 4.0 licence, and extract it to `data/raw/cgmacros/` (one `CGMacros-0XX/` folder per participant, plus `bio.csv`).
+2. Download the official data dictionaries (`DataDictionary_*.csv`) from the same PhysioNet page into `data/raw/cgmacros_docs/`. The reference profiler reads documented ranges from them.
+3. Run the ingestion:
+   ```bash
+   .venv/bin/pghd-ready ingest --source configs/sources/cgmacros.yaml \
+     --concepts configs/concepts/shared.yaml configs/conditions/cardiometabolic.yaml \
+     --data-root data/raw/cgmacros --out data/processed/cgmacros
+   ```
+
+`data/raw/`, `data/processed/` and `reports/local/` are git-ignored. Participant-level outputs, including the ingestion report, stay local.
+
+**Known source caveat (CGMacros HbA1c):** the official data dictionary specifies HbA1c in mmol/mol, but the values appear consistent with NGSP %. The configuration stores them with unit `%` under an explicit assumption, without converting any value. Every value is flagged as a unit conflict, and the unit remains **unresolved**: it has not been independently verified with the data providers.
+
 ## Guiding Principles
 
 - Open-source and research-oriented.

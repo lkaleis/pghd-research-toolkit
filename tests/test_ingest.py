@@ -188,6 +188,64 @@ def test_events_mapping_ambiguity_and_raw_attributes(result):
     assert ev.event_id.is_unique and all(i.endswith(f":{r}") for i, r in zip(ev.event_id, ev.source_row))
 
 
+def _attribute_source(tmp_path, values, tolerance):
+    """Tiny one-attribute source to exercise documented-range precision (synthetic)."""
+    root = tmp_path / "raw"
+    root.mkdir()
+    rows = "\n".join(f"{i},{v}" for i, v in enumerate(values, start=1))
+    (root / "p.csv").write_text("id,bmi\n" + rows + "\n")
+    rule = {"when": {"outside": [20.69, 49.09]}, "flag": "range_check"}
+    if tolerance:
+        rule["tolerance"] = "half_last_digit"
+    cfg = {"source": "syn_bmi", "version": "1", "temporal": {"output_timezone": None},
+           "annotations": {"flags": {"range_check": {"category": "suspected_anomaly", "description": "outside range"}}},
+           "tables": [{"name": "p", "files": {"path": "p.csv"}, "participant_id": {"from": "column", "column": "id"},
+                       "attributes": [{"concept": "body_mass_index", "column": "bmi", "unit": "kg/m2",
+                                       "rules": [rule]}]}]}
+    return ingest_source(SourceConfig.from_mapping(cfg), root, syn.concepts())
+
+
+def test_half_last_digit_tolerance_boundaries(tmp_path):
+    from pghd_ready.core.config import half_last_digit
+    from decimal import Decimal
+
+    assert half_last_digit(20.69) == Decimal("0.005") and half_last_digit(30) == Decimal("0.5")
+    assert half_last_digit("16.180") == Decimal("0.0005") and half_last_digit(116.8) == Decimal("0.05")
+    values = ["20.6849", "20.685", "20.68996", "20.69", "49.09", "49.095", "49.0951"]
+    res = _attribute_source(tmp_path, values, tolerance=True)
+    att = res.participant_attributes.sort_values("source_row")
+    flagged = [bool(f) for f in att["quality_flags"]]
+    # just outside the tolerance -> flagged; on or inside the widened bound -> not flagged
+    assert flagged == [True, False, False, False, False, False, True]
+    assert att["raw_value"].tolist() == values  # originals preserved exactly
+    assert (att["value_num"] == att["raw_value"].astype(float)).all()  # no rounding of stored values
+    rule = next(r for r in res.transform_log.records if r.operation == "rule")
+    assert rule.params["tolerance"] == "half_last_digit" and rule.params["effective_bounds"] == [20.685, 49.095]
+
+
+def test_without_tolerance_bounds_are_strict(tmp_path):
+    res = _attribute_source(tmp_path, ["20.68996", "20.69"], tolerance=False)
+    att = res.participant_attributes.sort_values("source_row")
+    assert [bool(f) for f in att["quality_flags"]] == [True, False]
+
+
+def test_rule_matches_counted_per_attribute_even_when_event_flag_is_shared(tmp_path):
+    """Two attributes of one event matching rules with the same flag: one event flag, two matched values."""
+    cfg = syn.wide_config()
+    attrs = cfg["tables"][DEVICE]["events"][0]["attributes"]
+    flag = "amount_outside_documented_range"
+    attrs["energy_kcal"]["rules"] = [{"when": {"outside": [500, 1000]}, "flag": flag}]   # Breakfast 400 kcal
+    attrs["carbohydrate_g"]["rules"] = [{"when": {"outside": [60, 100]}, "flag": flag}]   # Breakfast 50 g
+    res = ingest_source(SourceConfig.from_mapping(cfg), syn.write_wide_source(tmp_path / "raw"), syn.concepts())
+    rules = {r.target: r for r in res.transform_log.records if r.operation == "rule"}
+    assert rules["meal.energy_kcal"].params["values_matched"] == 2     # 400 and 150 kcal (600, 700 inside)
+    assert rules["meal.carbohydrate_g"].params["values_matched"] == 2  # 50 and 20 g (80, 90, 90 inside)
+    # the same two meals were already flagged by the energy rule: no new event flags, but 2 matched values
+    assert rules["meal.carbohydrate_g"].flags_raised.get(flag, 0) == 0
+    breakfast = res.events[res.events.raw_label == "Breakfast"].iloc[0]
+    assert breakfast.quality_flags.count(flag) == 1
+
+
 def test_streams_table(result):
     st = result.streams.set_index(["participant_id", "stream_id"])
     a1 = st.loc[(PID.format(1), "patch_a")]

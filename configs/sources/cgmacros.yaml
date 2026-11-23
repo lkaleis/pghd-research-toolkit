@@ -1,0 +1,258 @@
+# CGMacros v1.0.0 (PhysioNet, CC BY-NC-SA 4.0) - source configuration for the generic ingestion engine.
+#
+# M1c-1 scope: base ingestion only. No custom Python, no CGM sampling-origin classifier:
+# CGM readings keep is_interpolated = unknown (the 1-minute grid is not documented as
+# interpolated; our profiling evidence is recorded in the private data inventory, not here).
+#
+# Run (data stays local and git-ignored):
+#   pghd-ready ingest --source configs/sources/cgmacros.yaml \
+#     --concepts configs/concepts/shared.yaml configs/conditions/cardiometabolic.yaml \
+#     --data-root data/raw/cgmacros --out data/processed/cgmacros
+#
+# Evidence references:
+#   DD-TS  = data/raw/cgmacros_docs/DataDictionary_CGMacros-00X.csv (official, checksum-verified)
+#   DD-BIO = data/raw/cgmacros_docs/DataDictionary_Bio.csv (official, checksum-verified)
+#   PAGE   = PhysioNet project page v1.0.0 (saved in data/raw/cgmacros_docs/)
+#
+# Out of scope (deliberately not configured): gut_health_test.csv, microbes.csv, photo contents,
+# the undocumented 'Sugar' column (one file) and 'RecordIndex' (one file). Unused columns are
+# listed in every ingestion report.
+
+source: cgmacros
+version: "1.0"
+description: CGMacros v1.0.0 - CGM (Libre Pro, Dexcom G6 Pro), Fitbit Sense, logged meals, participant biomarkers.
+
+temporal:
+  output_timezone: null
+  date_shifted: true
+  notes: >-
+    Timestamps are naive clock times; PAGE states dates were randomly shifted by +/- N days
+    (365 < N < 720) per participant, so calendar dates, weekdays and seasons are not real.
+    No timezone is assumed. DD-TS documents 'Month/Day/Year HH:MM' but the files use
+    'YYYY-MM-DD HH:MM:SS' (documentation/data inconsistency; parsed as found).
+
+event_schema: pghd_ready.conditions.cardiometabolic.schemas:meal_event_schema
+
+annotations:
+  assumptions:
+    A-CGMACROS-BIO-01:
+      statement: >-
+        HbA1c values in bio.csv ('A1c PDL (Lab)') are stored with unit '%' (NGSP) for analysis purposes;
+        the true unit is UNRESOLVED.
+      rationale: >-
+        DD-BIO specifies mmol/mol. The values (4.6-8.5) appear consistent with NGSP %, not mmol/mol, and
+        ADA % cut-offs reproduce the published group sizes (15/16/14). This has NOT been independently
+        verified with the data providers. Values are never converted: the numeric value equals the source
+        text (kept in raw_value), and every value carries both the unit-conflict and the assumption flag.
+      evidence: DD-BIO field 'A1c PDL (Lab)' (range 4.6-8.5, unit given as mmol/mol); PAGE abstract group sizes
+  flags:
+    at_documented_reporting_limit:
+      category: documented_issue
+      action: flag
+      description: >-
+        CGM value equals the documented reporting limit (40 or 400 mg/dL); the true glucose may lie
+        beyond it (censored). Value kept unchanged.
+      evidence: "DD-TS 'Libre GL'/'Dexcom GL': minimum possible value of 40 and maximum possible value of 400"
+    outside_documented_range:
+      category: suspected_anomaly
+      description: >-
+        Value lies outside the range documented in the official data dictionary (compared with a tolerance of
+        half a unit in the last documented decimal place); kept unchanged.
+    below_documented_minimum_review:
+      # The annotation framework has no purely informational category; suspected_anomaly is the only
+      # flag-only category that neither implies a documented error nor an unresolved meaning.
+      category: suspected_anomaly
+      description: >-
+        Contextual range observation, NOT considered invalid: value is below the dictionary's documented
+        minimum but plausible in context (e.g. low-protein foods or drinks); the documented range appears
+        descriptive rather than a validity limit. Kept unchanged; review in context if relevant.
+    amount_outside_documented_range:
+      category: semantic_ambiguity
+      description: >-
+        'Amount Consumed' outside its documented 0-100 % range; the meaning of such values
+        (percent, servings, multiplier?) is unresolved. Kept unchanged, not interpreted.
+    documented_error_code:
+      category: documented_issue
+      action: set_null
+      description: Value documented as an erroneous reading/calculation; standardised value emptied, original kept.
+      evidence: "DD-BIO: 'LDL (Cal) ... 800 is an error in calculation'; 'VLDL (Cal) ... 400 indicates an erroneous reading'"
+    suspected_implausible_value:
+      category: suspected_anomaly
+      description: >-
+        Value is implausible although within the documented range (cholesterol/HDL ratio of 400);
+        kept unchanged.
+    semantics_undocumented:
+      category: semantic_ambiguity
+      description: Field is not described in the official data dictionary; values stored but not interpreted.
+    hba1c_documented_unit_conflict:
+      category: semantic_ambiguity
+      description: >-
+        Unit unresolved: the data dictionary specifies mmol/mol, but the values appear consistent with
+        NGSP %. Not independently verified. Original value kept in raw_value; no conversion applied.
+    hba1c_unit_assumed_percent:
+      category: assumption_based
+      assumption_id: A-CGMACROS-BIO-01
+      description: >-
+        Stored with unit '%' under A-CGMACROS-BIO-01 (unit unresolved; no conversion applied; numeric
+        value identical to the source).
+
+tables:
+  # ---------------------------------------------------------------- per-participant 1-minute files
+  - name: timeseries
+    files: {glob: "CGMacros-*/CGMacros-*.csv"}
+    participant_id: {from: path, regex: 'CGMacros-(\d{3})/', format: "{0}"}
+    read: {encoding: utf-8-sig, drop_columns: ["Unnamed: 0"]}
+    timestamp: {column: [Timestamp], format: "%Y-%m-%d %H:%M:%S"}
+    observations:
+      # CGM: sampling origin deliberately NOT declared (unknown) in M1c-1
+      - stream_id: libre_pro
+        concept: glucose_interstitial
+        column: [Libre GL]
+        unit: mg/dL
+        required: true
+        device: Abbott FreeStyle Libre Pro (upper arm)
+        native_interval_s: 900          # PAGE: 15-min sampling period
+        rules:
+          - {when: {in: [40, 400]}, flag: at_documented_reporting_limit}
+          - {when: {outside: [40, 400]}, flag: outside_documented_range, tolerance: half_last_digit}
+      - stream_id: dexcom_g6
+        concept: glucose_interstitial
+        column: [Dexcom GL]
+        unit: mg/dL
+        required: true
+        device: Dexcom G6 Pro (abdomen)
+        native_interval_s: 300          # PAGE: 5-min sampling
+        rules:
+          - {when: {in: [40, 400]}, flag: at_documented_reporting_limit}
+          - {when: {outside: [40, 400]}, flag: outside_documented_range, tolerance: half_last_digit}
+      - stream_id: fitbit_hr
+        concept: heart_rate
+        column: [HR]
+        unit: /min
+        required: true
+        device: Fitbit Sense
+        rules: [{when: {outside: [30, 176]}, flag: outside_documented_range, tolerance: half_last_digit}]          # DD-TS
+      - stream_id: fitbit_activity_kcal
+        concept: activity_energy_expenditure
+        column: [Calories (Activity)]
+        unit: kcal
+        device: Fitbit Sense
+        rules: [{when: {outside: [0, 16.178]}, flag: outside_documented_range, tolerance: half_last_digit}]       # DD-TS
+      - stream_id: fitbit_met
+        concept: physical_activity_met
+        column: [METs]
+        unit: "{MET}"
+        device: Fitbit Sense
+        rules: [{when: {outside: [10, 176]}, flag: outside_documented_range, tolerance: half_last_digit}]         # DD-TS (MET x 10)
+        scale:
+          factor: 0.1
+          basis: documented
+          evidence: "DD-TS 'Mets': Metabolic Equivalent of Task ... as provided by the FitBit Sense multiplied by 10"
+      - stream_id: fitbit_intensity
+        concept: activity_intensity_level
+        column: [Intensity]
+        device: Fitbit Sense
+        flags: [semantics_undocumented]
+      - stream_id: fitbit_steps
+        concept: step_count
+        column: [Steps]
+        unit: "{steps}"
+        device: Fitbit Sense
+        flags: [semantics_undocumented]
+    events:
+      - event_type: meal
+        domains: [behavioural]
+        when_present: [Meal Type]
+        subtype:
+          column: [Meal Type]
+          map:                          # case/plural variants only; anything else is flagged unmapped
+            breakfast: [Breakfast, breakfast]
+            lunch: [Lunch, lunch]
+            dinner: [Dinner, dinner]
+            snack: [Snack, snack, Snacks, snacks]
+        attributes:
+          energy_kcal:
+            column: [Calories]
+            unit: kcal
+            rules: [{when: {outside: [30, 1180]}, flag: outside_documented_range, tolerance: half_last_digit}]    # DD-TS
+          carbohydrate_g:
+            column: [Carbs]
+            unit: g
+            rules: [{when: {outside: [0, 176]}, flag: outside_documented_range, tolerance: half_last_digit}]
+          protein_g:
+            column: [Protein]
+            unit: g
+            rules:
+              # below the documented minimum: plausible in context (low-protein foods), not treated as invalid
+              - {when: {below: 3}, flag: below_documented_minimum_review, tolerance: half_last_digit}
+              - {when: {above: 176}, flag: outside_documented_range, tolerance: half_last_digit}
+          fat_g:
+            column: [Fat]
+            unit: g
+            rules: [{when: {outside: [0, 176]}, flag: outside_documented_range, tolerance: half_last_digit}]
+          fiber_g:
+            column: [Fiber]
+            unit: g
+            rules: [{when: {outside: [0, 176]}, flag: outside_documented_range, tolerance: half_last_digit}]
+          amount_consumed_raw:
+            column: [Amount Consumed]
+            rules: [{when: {outside: [0, 100]}, flag: amount_outside_documented_range, tolerance: half_last_digit}]
+          image_ref: {column: [Image path], kind: text}
+      - event_type: meal_photo          # DD-TS: photo of the start or end of a meal; not paired here
+        domains: [behavioural]
+        when_present: [Image path]
+        attributes:
+          image_ref: {column: [Image path], kind: text}
+
+  # ---------------------------------------------------------------- one row per participant
+  - name: bio
+    files: {path: bio.csv}
+    participant_id: {from: column, column: [subject], format: "{0:0>3}"}
+    attributes:
+      - {concept: age, column: [Age], unit: a, rules: [{when: {outside: [18, 69]}, flag: outside_documented_range, tolerance: half_last_digit}]}
+      - {concept: sex, column: [Gender]}
+      - {concept: self_identified_race_ethnicity, column: [Self-identify]}
+      - {concept: body_mass_index, column: [BMI], unit: kg/m2,
+         rules: [{when: {outside: [20.69, 49.09]}, flag: outside_documented_range, tolerance: half_last_digit}]}
+      - {concept: body_weight, column: [Body weight], unit: "[lb_av]",
+         rules: [{when: {outside: [116.8, 284.6]}, flag: outside_documented_range, tolerance: half_last_digit}]}
+      - {concept: body_height, column: [Height], unit: "[in_i]",
+         rules: [{when: {outside: [59, 72]}, flag: outside_documented_range, tolerance: half_last_digit}]}
+      - concept: hba1c
+        column: [A1c PDL (Lab)]
+        unit: "%"                       # DD-BIO says mmol/mol; unit UNRESOLVED - see A-CGMACROS-BIO-01; flagged on every value
+        flags: [hba1c_documented_unit_conflict, hba1c_unit_assumed_percent]
+        measured_at_raw: [Collection time PDL (Lab)]
+        rules: [{when: {outside: [4.6, 8.5]}, flag: outside_documented_range, tolerance: half_last_digit}]
+      - {concept: fasting_glucose_lab, column: [Fasting GLU - PDL (Lab)], unit: mg/dL,
+         measured_at_raw: [Collection time PDL (Lab)],
+         rules: [{when: {outside: [79, 218]}, flag: outside_documented_range, tolerance: half_last_digit}]}
+      - {concept: fasting_insulin, column: [Insulin], unit: "u[IU]/mL",   # DD-BIO: mcU/mL
+         measured_at_raw: [Collection time PDL (Lab)],
+         rules: [{when: {outside: [2.5, 46.4]}, flag: outside_documented_range, tolerance: half_last_digit}]}
+      - {concept: triglycerides, column: [Triglycerides], unit: mg/dL, measured_at_raw: [Collection time PDL (Lab)],
+         rules: [{when: {outside: [40, 1150]}, flag: outside_documented_range, tolerance: half_last_digit}]}
+      - {concept: total_cholesterol, column: [Cholesterol], unit: mg/dL, measured_at_raw: [Collection time PDL (Lab)],
+         rules: [{when: {outside: [91, 345]}, flag: outside_documented_range, tolerance: half_last_digit}]}
+      - {concept: hdl_cholesterol, column: [HDL], unit: mg/dL, measured_at_raw: [Collection time PDL (Lab)],
+         rules: [{when: {outside: [24, 106]}, flag: outside_documented_range, tolerance: half_last_digit}]}
+      - {concept: non_hdl_cholesterol, column: [Non HDL], unit: mg/dL, measured_at_raw: [Collection time PDL (Lab)],
+         rules: [{when: {outside: [38, 283]}, flag: outside_documented_range, tolerance: half_last_digit}]}
+      # LDL/VLDL: the documented error codes (800 / 400) are handled by the documented-issue rule;
+      # the documented ranges (21-260 / 8-78) exclude them, so no separate range rule is added.
+      - {concept: ldl_cholesterol_calculated, column: [LDL (Cal)], unit: mg/dL,
+         measured_at_raw: [Collection time PDL (Lab)],
+         rules: [{when: {equals: 800}, flag: documented_error_code}]}
+      - {concept: vldl_cholesterol_calculated, column: [VLDL (Cal)], unit: mg/dL,
+         measured_at_raw: [Collection time PDL (Lab)],
+         rules: [{when: {equals: 400}, flag: documented_error_code}]}
+      - {concept: cholesterol_hdl_ratio, column: [Cho/HDL Ratio], unit: "1",
+         measured_at_raw: [Collection time PDL (Lab)],
+         rules: [{when: {equals: 400}, flag: suspected_implausible_value}]}
+      # Fingersticks (DD-BIO: taken on day 1; only clock times are recorded, so no timestamp is built)
+      - {concept: capillary_glucose, column: ["#1 Contour Fingerstick GLU"], unit: mg/dL,
+         measured_at_raw: ["Time (t)"], rules: [{when: {outside: [80, 220]}, flag: outside_documented_range, tolerance: half_last_digit}]}
+      - {concept: capillary_glucose, column: ["#2 Contour Fingerstick GLU"], unit: mg/dL,
+         measured_at_raw: ["Time (t).1"], rules: [{when: {outside: [73, 314]}, flag: outside_documented_range, tolerance: half_last_digit}]}
+      - {concept: capillary_glucose, column: ["#3 Contour Fingerstick GLU"], unit: mg/dL,
+         measured_at_raw: ["Time (t).2"], rules: [{when: {outside: [67, 247]}, flag: outside_documented_range, tolerance: half_last_digit}]}

@@ -42,6 +42,12 @@ def test_header_normalisation():
         (lambda c: c["tables"][DEVICE]["events"][0]["subtype"]["map"].update(other=["lunch"]), "mapped to two"),
         (lambda c: c["tables"][DEVICE]["events"][0]["attributes"]["image_ref"].update(unit="g"), "text attributes"),
         (lambda c: c["tables"][DEVICE]["events"][0].update(domains=["behavioral"]), "unknown domain"),
+        (lambda c: c["tables"][PROFILE]["attributes"][3]["rules"][0].update(tolerance="half_last_digit"),
+         "only applies to 'outside', 'below' and 'above'"),
+        (lambda c: c["tables"][PROFILE]["attributes"][3]["rules"][0].update(when={"outside": [0, 100]},
+                                                                             tolerance="generous"),
+         "tolerance must be 'half_last_digit'"),
+        (lambda c: c["tables"][PROFILE]["attributes"][3]["rules"][0].update(when={"below": "abc"}), "not a number"),
         (lambda c: c["tables"][DEVICE]["observations"][0].update(
             sampling_origin={"value": "native", "basis": "assumption"}), "requires 'assumption_ids'"),
     ],

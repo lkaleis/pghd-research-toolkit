@@ -225,12 +225,13 @@ def _rule_mask(rule: RuleSpec, numeric: pd.Series | None, text: pd.Series) -> np
             m = s == float(x)
         elif op == "in":
             m = s.isin([float(v) for v in x])
-        elif op == "below":
-            m = s < float(x)
-        elif op == "above":
-            m = s > float(x)
-        else:  # outside
-            m = (s < float(x[0])) | (s > float(x[1]))
+        else:  # below / above / outside, with optional precision tolerance on the bounds (values untouched)
+            lo, hi = rule.bounds()
+            m = pd.Series(False, index=s.index)
+            if lo is not None:
+                m = m | (s < lo)
+            if hi is not None:
+                m = m | (s > hi)
         return m.fillna(False).to_numpy(dtype=bool)
     if op not in ("equals", "in"):
         raise IngestError(f"Rule operator {op!r} needs numeric values.")
@@ -405,6 +406,10 @@ class _Engine:
         s = self._step(f"{key}.rule.{rule.flag}", "rule", table, target, function="core.ingest.rule", **meta)
         s.fixed_params.update({"condition": {rule.op: rule.operand}, "flag": rule.flag,
                                "category": fd.category.value, "action": fd.action.value})
+        if rule.tolerance:
+            lo, hi = rule.bounds()
+            s.fixed_params.update({"tolerance": rule.tolerance, "effective_bounds": [lo, hi]})
+            s.notes.add("bounds widened by half a unit in the last documented decimal place; values not rounded")
         s.notes.add(f"evaluated on the parsed source value; {action}")
         return s
 
@@ -621,7 +626,11 @@ class _Engine:
             if self.registry.flags[rule.flag].action is FlagAction.SET_NULL and len(positions) and numeric is not None:
                 numeric = numeric.copy()
                 numeric.iloc[positions] = np.nan
-            self._count(self._rule_step(key, table, target, rule), n, n, {rule.flag: raised})
+            step = self._rule_step(key, table, target, rule)
+            # values matched by this rule; can exceed flags_raised when a record already carries the flag
+            # (e.g. several attributes of one event out of range share one event-level flag)
+            step.fixed_params["values_matched"] = step.fixed_params.get("values_matched", 0) + int(len(positions))
+            self._count(step, n, n, {rule.flag: raised})
         return numeric
 
     # ------------------------------------------------------------- events
@@ -718,7 +727,10 @@ class _Engine:
         idx = df.index[df[col].notna() & ok]
         raw = df.loc[idx, col]
         n = len(idx)
-        key = f"{t.name}.attributes.{a.concept}"
+        # several specs may map different columns to the same concept (e.g. repeated measurements):
+        # give each its own log steps so parameters and counts are not merged
+        same = [s for s in t.attributes if s.concept == a.concept]
+        key = f"{t.name}.attributes.{a.concept}" + (f"[{same.index(a) + 1}]" if len(same) > 1 else "")
         self._count(self._step(f"{key}.extract", "extract", t.name, a.concept), int(ok.sum()), n, column=col)
         flags = _new_flags(n)
         text = raw.str.strip()

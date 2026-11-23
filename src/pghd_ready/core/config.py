@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -129,15 +130,22 @@ def _domains(where: str, value: Any) -> tuple[str, ...]:
 
 @dataclass(frozen=True)
 class RuleSpec:
-    """Flag values meeting a condition. Evaluated on the parsed *source* value (before scaling/units)."""
+    """Flag values meeting a condition. Evaluated on the parsed *source* value (before scaling/units).
+
+    ``tolerance: half_last_digit`` (only for ``outside``/``below``/``above``) widens each boundary by half a
+    unit in its last written decimal place, to respect the precision of documented limits: a documented
+    minimum of 20.69 is treated as 20.685 (tolerance 0.005), 30 as 29.5, "16.180" (quoted to keep the trailing
+    zero) as 16.1795. Values are never rounded or changed; only the comparison bound moves.
+    """
 
     op: str
     operand: Any
     flag: str
+    tolerance: str | None = None
 
     @classmethod
     def parse(cls, where: str, spec: Mapping[str, Any]) -> "RuleSpec":
-        _check_keys(where, spec, {"when", "flag"}, {"when", "flag"})
+        _check_keys(where, spec, {"when", "flag", "tolerance"}, {"when", "flag"})
         when = spec["when"]
         if not isinstance(when, Mapping) or len(when) != 1 or next(iter(when)) not in _RULE_OPS:
             raise ConfigError(f"{where}: 'when' must have exactly one of {sorted(_RULE_OPS)}.")
@@ -146,7 +154,48 @@ class RuleSpec:
             raise ConfigError(f"{where}: 'in' needs a list.")
         if op == "outside" and not (isinstance(operand, list) and len(operand) == 2):
             raise ConfigError(f"{where}: 'outside' needs [low, high].")
-        return cls(op, operand, spec["flag"])
+        tol = spec.get("tolerance")
+        if tol is not None:
+            if tol != "half_last_digit":
+                raise ConfigError(f"{where}: tolerance must be 'half_last_digit'.")
+            if op not in ("outside", "below", "above"):
+                raise ConfigError(f"{where}: tolerance only applies to 'outside', 'below' and 'above'.")
+        rule = cls(op, operand, spec["flag"], tol)
+        rule.bounds()  # validates that boundaries are numeric
+        return rule
+
+    def bounds(self) -> tuple[float | None, float | None]:
+        """Effective (low, high) comparison bounds after tolerance; None where the operator has no such side."""
+        if self.op == "outside":
+            lo, hi = self.operand
+        elif self.op == "below":
+            lo, hi = self.operand, None
+        elif self.op == "above":
+            lo, hi = None, self.operand
+        else:
+            return None, None
+        return (None if lo is None else float(_widen(lo, -1, self.tolerance)),
+                None if hi is None else float(_widen(hi, +1, self.tolerance)))
+
+
+def half_last_digit(boundary: Any) -> Decimal:
+    """Half a unit in the last written decimal place of a boundary (20.69 -> 0.005, 30 -> 0.5, '16.180' -> 0.0005)."""
+    text = boundary if isinstance(boundary, str) else repr(boundary)
+    try:
+        d = Decimal(text.strip())
+    except InvalidOperation as exc:
+        raise ConfigError(f"Rule boundary {boundary!r} is not a number.") from exc
+    exponent = d.as_tuple().exponent
+    return Decimal(5).scaleb(exponent - 1)
+
+
+def _widen(boundary: Any, direction: int, tolerance: str | None) -> Decimal:
+    text = boundary if isinstance(boundary, str) else repr(boundary)
+    try:
+        d = Decimal(text.strip())
+    except InvalidOperation as exc:
+        raise ConfigError(f"Rule boundary {boundary!r} is not a number.") from exc
+    return d + direction * half_last_digit(boundary) if tolerance == "half_last_digit" else d
 
 
 @dataclass(frozen=True)

@@ -220,6 +220,10 @@ def _table(headers: list[str], rows: list[list[Any]]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _fmt_bound(x) -> str:
+    return "-" if x is None else f"{x:g}"
+
+
 def _n(x) -> str:
     return f"{int(x):,}"
 
@@ -460,9 +464,12 @@ def render_report(ctx: ReportContext) -> str:
             rows.append([f"`{tr}`", s, k, _n(len(g)), summary])
         w(_table(["Transform", "Stream", "Diagnostic", "Participants", "Values"], rows))
     w("**Rules** (evaluated on the parsed source value, before scaling or unit conversion):\n")
-    w(_table(["Table", "Target", "Condition", "Flag", "Category", "Action", "Records matched"],
-             [[r.table, r.target, json.dumps(r.params.get("condition")), f"`{r.params.get('flag')}`",
-               r.params.get("category"), r.params.get("action"), _n(sum(r.flags_raised.values()))]
+    w(_table(["Table", "Target", "Condition", "Effective bounds", "Flag", "Category", "Action", "Values matched"],
+             [[r.table, r.target, json.dumps(r.params.get("condition")),
+               (f"[{_fmt_bound(r.params['effective_bounds'][0])}, {_fmt_bound(r.params['effective_bounds'][1])}] "
+                "(half last digit)") if r.params.get("tolerance") else "as written",
+               f"`{r.params.get('flag')}`", r.params.get("category"), r.params.get("action"),
+               _n(r.params.get("values_matched", sum(r.flags_raised.values())))]
               for r in by_op.get("rule", [])]))
 
     # 7. missing ----------------------------------------------------------------------
@@ -499,7 +506,7 @@ def render_report(ctx: ReportContext) -> str:
             rows.append(["Unparseable numeric value (original kept, standardised value empty)", r.table, r.target,
                          _n(n)])
     for r in by_op.get("rule", []):
-        n = sum(r.flags_raised.values())
+        n = r.params.get("values_matched", sum(r.flags_raised.values()))
         if n and r.params.get("action") == "set_null":
             rows.append([f"Set to empty by documented-issue rule `{r.params.get('flag')}` (original kept)",
                          r.table, r.target, _n(n)])
@@ -540,6 +547,11 @@ def render_report(ctx: ReportContext) -> str:
     for r in ctx.log:
         for a in r.assumption_ids:
             used_a[a].append(f"{r.operation} ({r.table}{'/' + r.target if r.target else ''})")
+    if reg is not None:  # assumptions referenced through flags attached to records (e.g. static flags)
+        for code, per_table in flagged.items():
+            aid = reg.flags[code].assumption_id
+            if aid:
+                used_a[aid].append(f"flag `{code}` ({', '.join(sorted(per_table))})")
     if used_a and reg is not None:
         w("**Assumptions applied in this run** (results depend on them being true):\n")
         w(_table(["Assumption", "Statement", "Rationale", "Used by"],
