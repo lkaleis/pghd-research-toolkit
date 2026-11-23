@@ -221,3 +221,22 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+
+# Research datasets - never push raw or processed data
+data/raw/
+data/processed/
+data/synthetic/
+
+# Private project documentation
+PROJECT_BRIEF.md
+docs/
+planning/
+
+# Claude-specific files
+CLAUDE.md
+**/CLAUDE.md
+.claude/
+.claude*
+CLAUDE.local.md
+.mcp.json
