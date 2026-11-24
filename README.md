@@ -87,7 +87,7 @@ The toolkit aims to produce:
 | Three-state sampling origin per observation (native / interpolated / unknown, default unknown) with explicit inclusion policies | Implemented as a generic representation. Row-level classification of CGM values is not planned (deferred research consideration) |
 | Shared concept registry plus condition-specific registries, with optional many-to-many PGHD domain tags | Implemented (the four-term domain vocabulary is fixed in code; extending it requires a code change) |
 | Configuration-driven ingestion of delimited-text (CSV) sources, with provenance, rejected-record preservation and an analyst-readable ingestion report | Implemented, tested on a small synthetic example |
-| CGMacros base ingestion (CGM, Fitbit, meals, participant attributes) with independent reconciliation tests | Implemented, run locally only (data not distributed); under review |
+| CGMacros base ingestion (CGM, Fitbit, meals, participant attributes) with independent reconciliation tests | Implemented, run locally only (data not distributed) |
 | Data-quality profiling (coverage, gaps, sampling, plausibility, cross-stream agreement) | Planned |
 | Temporal alignment and task-specific predictive-fitness assessment | Planned |
 | JSON, FHIR or open mHealth inputs; free-text sources | Not implemented |
