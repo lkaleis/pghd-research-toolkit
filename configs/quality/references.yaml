@@ -1,0 +1,17 @@
+# References cited by M2a quality rules. A rule may be technically approved only when its reference is fully
+# verified: bibliographic details AND the cited content/location checked against the primary source, with
+# verified_by and verified_on recorded.
+references:
+  REF-NCEP-ATP3-2002:
+    type: clinical_guideline
+    citation: >-
+      National Heart, Lung, and Blood Institute (NHLBI). Third Report of the National Cholesterol Education Program
+      (NCEP) Expert Panel on Detection, Evaluation, and Treatment of High Blood Cholesterol in Adults (Adult
+      Treatment Panel III) Final Report. September 2002.
+    identifier: "https://www.nhlbi.nih.gov/files/docs/resources/heart/atp-3-cholesterol-full-report.pdf"
+    related_identifier: "doi:10.1161/circ.106.25.3143"   # journal version (Circulation 2002;106(25):3143), Crossref-checked
+    version_or_date: "2002-09"
+    bibliographic_verified: true    # owner checked the official NHLBI PDF, 2026-11-24
+    content_verified: true          # owner: the report states non-HDL cholesterol is calculated as total cholesterol minus HDL cholesterol
+    verified_by: project owner
+    verified_on: "2026-11-24"

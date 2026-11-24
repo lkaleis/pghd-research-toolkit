@@ -1,0 +1,33 @@
+# How M2a consistency rules are applied to CGMacros v1.0.0. Declarations here are dataset-specific and rest on the
+# explicit assumptions below, not on verified dataset facts. No rule is run against CGMacros until it is
+# technically approved and the owner authorises a review-mode run.
+dataset: cgmacros
+
+assumptions:
+  A-CGMACROS-LIPID-01:
+    statement: >-
+      Total cholesterol, HDL cholesterol and non-HDL cholesterol originate from the same fasting screening lipid
+      panel and are reported at 1 mg/dL resolution. This is an assumption, not a verified dataset fact.
+    approved_by: project owner
+    approved_on: "2026-11-24"
+    supporting_evidence: >-
+      DD-BIO describes each field as "fasting ... taken at start of study in mg/dL" and provides one shared
+      "Collection time PDL (Lab)" ("Time the fasting lab measurements were taken"). Aggregate profiling: 45/45
+      integer values per field, last digits 0-9 present. Same specimen/panel and the reporting resolution are not
+      documented.
+
+applications:
+  - rule_id: CM-CONS-NONHDL-001
+    rule_version: "1.0.0"
+    run_authorization:             # owner authorisation to run this rule on this dataset; separate from rule review
+      status: not_authorized       # not_authorized | review_mode_authorized
+      by: null
+      on: null
+    co_measurement:
+      same_record: true            # same participant, source file and source row
+      same_measured_at_raw: true   # identical lab collection time text on target and operands
+      assumption_id: A-CGMACROS-LIPID-01
+    resolution:
+      non_hdl_cholesterol: {value: 1, unit: mg/dL, assumption_id: A-CGMACROS-LIPID-01}
+      total_cholesterol: {value: 1, unit: mg/dL, assumption_id: A-CGMACROS-LIPID-01}
+      hdl_cholesterol: {value: 1, unit: mg/dL, assumption_id: A-CGMACROS-LIPID-01}

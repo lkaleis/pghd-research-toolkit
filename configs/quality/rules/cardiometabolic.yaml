@@ -1,0 +1,37 @@
+# M2a consistency rules (concept-level, dataset-independent). These are CONSISTENCY checks, not clinical
+# plausibility checks: a finding means the reported values contradict their definition at the declared reporting
+# resolution and need review. It is not a confirmed error and says nothing about clinical normality.
+# Dataset-specific co-measurement and resolution declarations live in configs/quality/applications/.
+rules:
+  CM-CONS-NONHDL-001:
+    version: "1.0.0"
+    title: Non-HDL cholesterol equals total cholesterol minus HDL cholesterol
+    type: linear_derivation
+    finding_type: inconsistent
+    target: {concept: non_hdl_cholesterol, unit: mg/dL}
+    operands:
+      - {concept: total_cholesterol, unit: mg/dL, coefficient: 1}
+      - {concept: hdl_cholesterol, unit: mg/dL, coefficient: -1}
+    reference:
+      id: REF-NCEP-ATP3-2002
+      locator: "NHLBI ATP III Final Report (September 2002), Section II, subsection 3(b) 'Non-HDL cholesterol as a risk factor', printed page II-7"
+    rationale: >-
+      Non-HDL cholesterol is defined as total cholesterol minus HDL cholesterol. When all three values come from the
+      same panel, analytical error is shared and only rounding can make correctly reported values differ, so a
+      difference larger than the combined rounding intervals is a contradiction among the reported values.
+    limitations:
+      - Assumes non-HDL was derived as TC - HDL from the same specimen; a directly measured or otherwise derived non-HDL may differ by method.
+      - Values stored in a unit other than mg/dL, or converted during ingestion, are not evaluated.
+      - Records with TC and HDL but no reported non-HDL are not candidates.
+    technical_review:
+      status: draft
+      by: null
+      on: null
+      notes: >-
+        Implementation tested on synthetic data only. Reference content and locator verified by the project owner
+        (2026-11-24); technical approval pending owner review of the implementation.
+    clinical_review:
+      status: not_reviewed
+      by: null
+      on: null
+      notes: Definitional consistency rule; clinical review not required to run, and none has been performed.
