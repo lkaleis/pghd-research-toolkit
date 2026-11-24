@@ -4,8 +4,9 @@ A *concept* names what a value means (e.g. ``heart_rate``, ``body_weight``)
 independently of any source column name. Concepts are defined
 in condition configuration (YAML), not in code. The registry deliberately holds
 only what the toolkit uses: kind, value type, canonical unit, optional
-concept-specific unit conversions, a description and optional references to
-external standards. It is not a terminology server.
+concept-specific unit conversions, optional accepted units (stored as measured,
+never converted), a description and optional references to external standards.
+It is not a terminology server.
 """
 
 from __future__ import annotations
@@ -108,6 +109,14 @@ class Concept:
             raise ConceptError(f"Concept {self.id}: no defined conversion from {unit!r} to {self.canonical_unit!r}.") from exc
 
     def to_canonical(self, values, unit: str):
+        """Convert values to the canonical unit.
+
+        The canonical unit always passes through unchanged. Accepted (as-measured) non-canonical units raise
+        ``ConceptError``: no conversion is defined for them, so they must never be relabelled as canonical.
+        """
+        if unit != self.canonical_unit and unit in self.accepted_units:
+            raise ConceptError(f"Concept {self.id}: {unit!r} is accepted as measured; no conversion to "
+                               f"{self.canonical_unit!r} is defined.")
         return values * self.factor_to_canonical(unit)
 
 
@@ -205,7 +214,7 @@ def check_table_concepts(df: pd.DataFrame, registry: ConceptRegistry, kind: Conc
     """Return problems with concept usage in a common-representation table.
 
     Checks that each concept is registered, of the right kind, and that numeric
-    values are stored in the concept's canonical unit.
+    values are stored in the concept's canonical unit or in one of its accepted (as-measured) units.
     """
     problems: list[str] = []
     unit_col = "unit" if "unit" in df.columns else None

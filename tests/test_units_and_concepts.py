@@ -85,7 +85,10 @@ def test_cardiometabolic_registry_loads_and_is_minimal():
     h = reg.get("hba1c")
     assert h.canonical_unit == "%" and h.accepted_units == ("mmol/mol",)
     assert h.stored_unit("%") == "%" and h.stored_unit("mmol/mol") == "mmol/mol"
-    assert h.factor_to_canonical("mmol/mol") == 1.0
+    assert h.factor_to_canonical("mmol/mol") == 1.0  # factor to the *stored* unit (itself)
+    assert h.to_canonical(6.5, "%") == 6.5  # canonical unit passes through unchanged
+    with pytest.raises(ConceptError, match="accepted as measured"):
+        h.to_canonical(48.0, "mmol/mol")  # accepted non-canonical unit: never silently relabelled as %
     with pytest.raises(ConceptError):
         h.factor_to_canonical("mmol/L")
     assert len(reg.concepts) < 40  # guard against registry sprawl
