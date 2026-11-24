@@ -3,6 +3,8 @@
 Deliberately independent of the ingestion engine:
   * reads files with ``pandas.read_csv`` (the engine uses the ``csv`` module),
   * takes documented ranges from the official data dictionaries (the engine uses our YAML),
+  * decides from the dictionary text itself which ranges are source-conformance constraints
+    (stated device limits, percentage definitions) and which merely describe this dataset,
   * computes simple aggregates per participant and column.
 
 It returns aggregates only. No participant-level data is written anywhere.
@@ -12,7 +14,6 @@ from __future__ import annotations
 
 import re
 from collections import Counter
-from decimal import Decimal
 from pathlib import Path
 
 import pandas as pd
@@ -38,24 +39,35 @@ def available() -> bool:
     return CGM_ROOT.is_dir() and (DOCS_ROOT / "DataDictionary_CGMacros-00X.csv").is_file()
 
 
-def _half_unit(text: str) -> Decimal:
-    """Half a unit in the last written decimal place, derived from the dictionary text itself."""
-    decimals = len(text.split(".")[1]) if "." in text else 0
-    return Decimal(1).scaleb(-decimals) / 2
-
-
 def documented_ranges(dictionary_csv: Path) -> dict[str, tuple[float, float]]:
     """Parse 'Numeric: a-b' ranges from an official data dictionary (field names lower-cased, stripped).
 
-    Bounds are widened by half a unit in the last decimal place written in the dictionary (precision tolerance).
+    Bounds are taken exactly as written (strict comparison; no precision tolerance).
     """
     dd = pd.read_csv(dictionary_csv, encoding="utf-8-sig")
     out = {}
     for field, rng in zip(dd["Field"], dd["Range"]):
         m = re.search(r"numeric:\s*([\d.]+)\s*-\s*([\d.]+)", str(rng), re.IGNORECASE)  # dictionary mixes case
         if m:
-            lo, hi = m.group(1), m.group(2)
-            out[str(field).strip().lower()] = (float(Decimal(lo) - _half_unit(lo)), float(Decimal(hi) + _half_unit(hi)))
+            out[str(field).strip().lower()] = (float(m.group(1)), float(m.group(2)))
+    return out
+
+
+def conformance_fields(dictionary_csv: Path) -> dict[str, str]:
+    """Fields whose documented range is a source constraint, judged from the description text alone.
+
+    'device_limits': the description states a minimum/maximum *possible* value (instrument reporting limits).
+    'percentage': the description defines the field as a percentage (0-100 by definition).
+    Every other 'Numeric: a-b' range is treated as descriptive of the dataset, not as a validity range.
+    """
+    dd = pd.read_csv(dictionary_csv, encoding="utf-8-sig")
+    out = {}
+    for field, desc in zip(dd["Field"], dd["Description"]):
+        d = str(desc).lower()
+        if "minimum possible value" in d and "maximum possible value" in d:
+            out[str(field).strip().lower()] = "device_limits"
+        elif "%" in d:
+            out[str(field).strip().lower()] = "percentage"
     return out
 
 
@@ -64,7 +76,10 @@ def _num(s: pd.Series) -> pd.Series:
 
 
 def profile() -> dict:
-    ts_ranges = documented_ranges(DOCS_ROOT / "DataDictionary_CGMacros-00X.csv")  # keys: 'libre gl', 'mets', ...
+    ts_dd = DOCS_ROOT / "DataDictionary_CGMacros-00X.csv"
+    ts_all = documented_ranges(ts_dd)  # keys: 'libre gl', 'mets', ...
+    ts_conf = conformance_fields(ts_dd)
+    ts_ranges = {f: r for f, r in ts_all.items() if f in ts_conf}  # only source constraints are checked
     files, streams, meals, ts_bounds = {}, {}, {}, {}
     for path in sorted(CGM_ROOT.glob("CGMacros-*/CGMacros-*.csv")):
         pid = "cgmacros:" + path.parent.name.split("-")[1]
@@ -92,12 +107,13 @@ def profile() -> dict:
                 v = _num(meal_rows[col])
                 rng = ts_ranges.get(col.lower())
                 m[target] = {"n": int(v.notna().sum()), "sum": float(v.sum()),
-                             "below": int((v < rng[0]).sum()) if rng else None,
-                             "above": int((v > rng[1]).sum()) if rng else None,
-                             "outside": int(((v < rng[0]) | (v > rng[1])).sum()) if rng else None}
+                                "outside": int(((v < rng[0]) | (v > rng[1])).sum()) if rng else None}
         meals[pid] = m
 
-    bio_ranges = documented_ranges(DOCS_ROOT / "DataDictionary_Bio.csv")
+    bio_dd = DOCS_ROOT / "DataDictionary_Bio.csv"
+    bio_all = documented_ranges(bio_dd)
+    bio_conf = conformance_fields(bio_dd)
+    bio_ranges = {f: r for f, r in bio_all.items() if f in bio_conf}
     bio = pd.read_csv(CGM_ROOT / "bio.csv", dtype=str, keep_default_na=False, encoding="utf-8-sig")
     bio.columns = [c.strip() for c in bio.columns]  # duplicate 'Time (t)' become 'Time (t).1', '.2' (pandas)
     attrs = {}
@@ -113,4 +129,6 @@ def profile() -> dict:
     for col, concept in (("Gender", "sex"), ("Self-identify", "self_identified_race_ethnicity")):
         attrs[concept] = {"n": int((bio[col].str.strip() != "").sum()), "labels": Counter(bio[col].str.strip())}
     return {"files": files, "streams": streams, "meals": meals, "ts_bounds": ts_bounds, "attributes": attrs,
-            "bio_participants": int((bio["subject"].str.strip() != "").sum())}
+            "bio_participants": int((bio["subject"].str.strip() != "").sum()),
+            "conformance_fields": {**ts_conf, **bio_conf},
+            "descriptive_range_fields": sorted((set(ts_all) - set(ts_conf)) | (set(bio_all) - set(bio_conf)))}

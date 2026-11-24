@@ -51,9 +51,13 @@ concepts:
     kind: attribute
     value_type: numeric
     canonical_unit: "%"
+    accepted_units: ["mmol/mol"]
     description: >-
-      Glycated haemoglobin in NGSP %. Values in IFCC mmol/mol require a
-      non-linear (affine) conversion that is intentionally not defined here.
+      Glycated haemoglobin, reported either in % (DCCT/NGSP) or in mmol/mol
+      (IFCC SI units). Both are accepted and each value is stored in the unit
+      in which it was measured. No conversion is applied: the relation between
+      the two is affine (IFCC = 10.93 x NGSP - 23.50), so values in different
+      units must not be pooled without an explicit, reviewed conversion.
 
   fasting_glucose_lab:
     kind: attribute

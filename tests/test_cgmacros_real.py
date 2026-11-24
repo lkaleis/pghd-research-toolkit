@@ -87,19 +87,20 @@ def test_values_equal_raw_except_documented_scale(run):
     assert obs["value"].notna().all()  # every non-empty source cell parsed
 
 
-def test_cgm_limit_and_range_flags_match_reference(run, reference):
+def test_cgm_limit_and_device_limit_flags_match_reference(run, reference):
+    """CGM conformance: reporting-limit values and values outside the strict 40-400 mg/dL device limits."""
     obs = run.observations
     for stream in ("libre_pro", "dexcom_g6"):
         s = obs[obs["stream_id"] == stream]["quality_flags"]
         at_limit = sum("at_documented_reporting_limit" in f for f in s)
-        outside = sum("outside_documented_range" in f for f in s)
+        outside = sum("outside_documented_device_limits" in f for f in s)
         ref_rows = [r for (p, st), r in reference["streams"].items() if st == stream]
         assert at_limit == sum(r["at_limit"] for r in ref_rows), stream
         assert outside == sum(r["outside"] for r in ref_rows), stream
+    # Fitbit streams: the dictionary ranges are descriptive, so neither side applies a range check
     for stream in ("fitbit_hr", "fitbit_activity_kcal", "fitbit_met"):
-        s = obs[obs["stream_id"] == stream]["quality_flags"]
-        ref_out = sum(r["outside"] for (p, st), r in reference["streams"].items() if st == stream)
-        assert sum("outside_documented_range" in f for f in s) == ref_out, stream
+        assert all(r["outside"] is None for (p, st), r in reference["streams"].items() if st == stream), stream
+        assert not any(obs.loc[obs["stream_id"] == stream, "quality_flags"].map(len)), stream
 
 
 def test_sampling_origin_is_unknown_everywhere(run):
@@ -163,25 +164,15 @@ def test_meal_attributes_preserve_raw_and_match_reference(run, reference):
         assert np.allclose(meals[target].dropna(), pd.to_numeric(raw.loc[meals[target].notna(), target])), target
     flag_out = Counter()
     for flags in meals["quality_flags"]:
-        flag_out.update(f for f in flags if "documented" in f)
-
-    def ref(target, key):
-        return sum(r[target][key] for r in reference["meals"].values() if target in r)
-
-    # a meal can match rules on several attributes; the flag is per event, so per-attribute matches come from the
-    # log's values_matched (flags_raised only counts newly added event flags)
+        flag_out.update(flags)
     logged = {(r.target, r.params["flag"]): r.params["values_matched"]
               for r in run.transform_log.records if r.operation == "rule"}
-    for t in ("energy_kcal", "carbohydrate_g", "fat_g", "fiber_g"):
-        assert logged[(f"meal.{t}", "outside_documented_range")] == ref(t, "outside"), t
-    # protein: below the documented minimum is a contextual review flag, above the maximum a range anomaly
-    assert logged[("meal.protein_g", "below_documented_minimum_review")] == ref("protein_g", "below")
-    assert logged[("meal.protein_g", "outside_documented_range")] == ref("protein_g", "above")
-    assert flag_out["below_documented_minimum_review"] == ref("protein_g", "below")
-    low_protein = meals[meals["quality_flags"].map(lambda f: "below_documented_minimum_review" in f)]
-    assert low_protein["protein_g"].notna().all()  # values preserved, not removed or emptied
-    assert logged[("meal.amount_consumed_raw", "amount_outside_documented_range")] == ref("amount_consumed_raw", "outside") \
+    # the only meal rule is the percentage definition of Amount Consumed (strict 0-100)
+    assert {k for k in logged if k[0].startswith("meal.")} == {("meal.amount_consumed_raw", "amount_outside_documented_range")}
+    ref_out = sum(r["amount_consumed_raw"]["outside"] for r in reference["meals"].values() if "amount_consumed_raw" in r)
+    assert logged[("meal.amount_consumed_raw", "amount_outside_documented_range")] == ref_out \
         == flag_out["amount_outside_documented_range"]
+    assert set(flag_out) <= {"amount_outside_documented_range", "unmapped_category"}
 
 
 # ---------------------------------------------------------------- participant attributes
@@ -196,19 +187,29 @@ def test_bio_attributes_match_reference_and_preserve_raw(run, reference):
             assert Counter(sub["value_text"]) == r["labels"], concept  # labels preserved, not harmonised
 
 
-def test_bio_range_flags_use_documented_precision(run, reference):
-    """Range flags on bio attributes match the reference (both use half-last-digit tolerance); values unrounded."""
+def test_only_source_conformance_rules_are_configured(run, reference):
+    """Rules exist only where the source documents a constraint; descriptive dictionary ranges get no rule."""
+    assert set(reference["conformance_fields"]) == {"libre gl", "dexcom gl", "amount consumed"}
+    assert {"hr", "calories", "protein", "bmi", "age"} <= set(reference["descriptive_range_fields"])
+    rules = {(r.target, r.params["flag"]) for r in run.transform_log.records if r.operation == "rule"}
+    assert rules == {
+        ("libre_pro", "at_documented_reporting_limit"), ("libre_pro", "outside_documented_device_limits"),
+        ("dexcom_g6", "at_documented_reporting_limit"), ("dexcom_g6", "outside_documented_device_limits"),
+        ("meal.amount_consumed_raw", "amount_outside_documented_range"),
+        ("ldl_cholesterol_calculated", "documented_error_code"),
+        ("vldl_cholesterol_calculated", "documented_error_code"),
+    }
+    assert not any(r.params.get("tolerance") for r in run.transform_log.records if r.operation == "rule")
+    removed = {"outside_documented_range", "below_documented_minimum_review", "suspected_implausible_value"}
+    for table in (run.observations, run.events, run.participant_attributes):
+        assert not any(removed & set(f) for f in table["quality_flags"])
     att = run.participant_attributes
-    flagged = att[att["quality_flags"].map(lambda f: "outside_documented_range" in f)].groupby("concept").size()
-    for concept, r in reference["attributes"].items():
-        if r.get("outside") is not None and concept not in ("ldl_cholesterol_calculated", "vldl_cholesterol_calculated"):
-            assert int(flagged.get(concept, 0)) == r["outside"], concept
     bmi = att[att["concept"] == "body_mass_index"]
-    assert int(flagged.get("body_mass_index", 0)) == 0  # the rounding artefact at the documented minimum is gone
+    assert not any(bmi["quality_flags"].map(len))
     assert (bmi["value_num"] == pd.to_numeric(bmi["raw_value"])).all()  # no rounding of stored values
 
 
-def test_documented_errors_and_anomalies_in_bio(run, reference):
+def test_documented_error_codes_in_bio(run, reference):
     att = run.participant_attributes
     for concept, code in (("ldl_cholesterol_calculated", 800.0), ("vldl_cholesterol_calculated", 400.0)):
         sub = att[att["concept"] == concept]
@@ -217,17 +218,21 @@ def test_documented_errors_and_anomalies_in_bio(run, reference):
         assert sub.loc[hit, "value_num"].isna().all()
         assert all("documented_error_code" in f for f in sub.loc[hit, "quality_flags"])
         assert sub.loc[~hit, "value_num"].notna().all()
+    # Cho/HDL ratio: no ingestion rule (cross-field consistency is M2 work); the value is kept and unflagged
     ratio = att[att["concept"] == "cholesterol_hdl_ratio"]
     hit = pd.to_numeric(ratio["raw_value"]) == 400.0
-    assert hit.sum() == 1 and ratio.loc[hit, "value_num"].notna().all()  # flagged, not emptied
-    assert all("suspected_implausible_value" in f for f in ratio.loc[hit, "quality_flags"])
+    assert hit.sum() == 1 and (ratio.loc[hit, "value_num"] == 400.0).all()
+    assert not any(ratio["quality_flags"].map(len))
 
 
-def test_hba1c_kept_as_reported_and_flagged(run):
+def test_hba1c_is_percent_unchanged_and_unflagged(run):
+    """CGMacros HbA1c is NGSP/DCCT % (Das et al. 2025); the dictionary's mmol/mol label is a documentation error."""
     a = run.participant_attributes[run.participant_attributes["concept"] == "hba1c"]
     assert len(a) == 45 and (a["unit"] == "%").all()
     assert (a["value_num"] == pd.to_numeric(a["raw_value"])).all()  # numeric value unchanged, no conversion
-    assert all({"hba1c_documented_unit_conflict", "hba1c_unit_assumed_percent"} <= set(f) for f in a["quality_flags"])
+    assert not any(len(f) for f in a["quality_flags"])  # no unit-conflict or assumption flags
+    assert not any(r.operation == "unit_conversion" and r.target == "hba1c" for r in run.transform_log.records)
+    assert 4.6 <= a["value_num"].min() and a["value_num"].max() <= 8.5
     assert a["measured_at"].isna().all() and a["measured_at_raw"].notna().all()
 
 
@@ -247,5 +252,5 @@ def test_outputs_written_and_summary_is_aggregate(run, tmp_path):
     summary = (out / "ingest_summary.json").read_text()
     assert "cgmacros:0" not in summary  # no participant identifiers in the machine-readable summary
     report = (out / "ingestion_report.md").read_text()
-    assert "COMPLETED WITH WARNINGS" in report and "A-CGMACROS-BIO-01" in report
+    assert "COMPLETED WITH WARNINGS" in report and "A-CGMACROS-BIO-01" not in report
     assert "not declared or classified - unknown by default" in report

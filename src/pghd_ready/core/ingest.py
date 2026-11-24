@@ -579,13 +579,13 @@ class _Engine:
         out_unit = None
         if concept.canonical_unit is not None:
             factor = concept.factor_to_canonical(o.unit)
-            if factor != 1.0 or o.unit != concept.canonical_unit:
+            if factor != 1.0 or o.unit != concept.stored_unit(o.unit):
                 value = value * factor
                 us = self._step(f"{key}.unit_conversion", "unit_conversion", t.name, o.stream_id,
                                 function="core.ingest.unit_conversion")
                 us.fixed_params.update({"from_unit": o.unit, "to_unit": concept.canonical_unit, "factor": factor})
                 self._count(us, n, n)
-            out_unit = concept.canonical_unit
+            out_unit = concept.stored_unit(o.unit)
         for code in o.flags:
             self._count(self._step(f"{key}.static_flags", "static_flags", t.name, o.stream_id), n, n,
                         {code: _add_flag(flags, range(n), code)})
@@ -748,13 +748,13 @@ class _Engine:
             num = self._apply_rules(key, t.name, a.concept, a.rules, num, text, flags)
             if concept.canonical_unit is not None:
                 factor = concept.factor_to_canonical(a.unit)
-                if factor != 1.0 or a.unit != concept.canonical_unit:
+                if factor != 1.0 or a.unit != concept.stored_unit(a.unit):
                     num = num * factor
                     us = self._step(f"{key}.unit_conversion", "unit_conversion", t.name, a.concept,
                                     function="core.ingest.unit_conversion")
                     us.fixed_params.update({"from_unit": a.unit, "to_unit": concept.canonical_unit, "factor": factor})
                     self._count(us, n, n)
-                unit = concept.canonical_unit
+                unit = concept.stored_unit(a.unit)
             value_num = num.to_numpy(dtype=float)
         for code in a.flags:
             self._count(self._step(f"{key}.static_flags", "static_flags", t.name, a.concept), n, n,

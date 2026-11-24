@@ -432,3 +432,23 @@ def test_unknown_transform_or_plugin_fails(tmp_path):
     cfg = syn.wide_config(plugins=["no_such_plugin_module"])
     with pytest.raises(TransformError, match="Cannot import"):
         ingest_source(SourceConfig.from_mapping(cfg), root, syn.concepts())
+
+
+def test_hba1c_stored_in_the_unit_it_was_measured_without_conversion(tmp_path):
+    """HbA1c in % and in mmol/mol are both accepted; values and units are kept as measured (synthetic)."""
+    out = {}
+    for unit, values in (("%", ["5.4", "6.5"]), ("mmol/mol", ["36", "48"])):
+        root = tmp_path / unit.replace("/", "_")
+        root.mkdir()
+        (root / "p.csv").write_text("id,a1c\n" + "\n".join(f"{i},{v}" for i, v in enumerate(values, 1)) + "\n")
+        cfg = {"source": "syn_a1c", "version": "1", "temporal": {"output_timezone": None},
+               "tables": [{"name": "p", "files": {"path": "p.csv"},
+                           "participant_id": {"from": "column", "column": "id"},
+                           "attributes": [{"concept": "hba1c", "column": "a1c", "unit": unit}]}]}
+        res = ingest_source(SourceConfig.from_mapping(cfg), root, syn.concepts())
+        att = res.participant_attributes.sort_values("source_row")
+        assert (att["unit"] == unit).all()
+        assert att["value_num"].tolist() == [float(v) for v in values]
+        assert not any(r.operation == "unit_conversion" for r in res.transform_log.records)
+        out[unit] = att
+    assert set(out) == {"%", "mmol/mol"}

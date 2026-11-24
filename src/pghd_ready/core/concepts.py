@@ -69,6 +69,9 @@ class Concept:
     unit_conversions: Mapping[str, float] = field(default_factory=dict)
     references: Mapping[str, str] = field(default_factory=dict)
     domains: tuple[str, ...] = ()
+    # Other units in which this concept is legitimately measured and which are stored AS MEASURED, never converted
+    # (for example HbA1c in % (NGSP) or mmol/mol (IFCC), whose relation is affine, not a multiplicative factor).
+    accepted_units: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         validate_domains(f"Concept {self.id}", self.domains)
@@ -78,16 +81,24 @@ class Concept:
             raise ConceptError(f"Concept {self.id}: numeric concepts need a canonical_unit.")
         if self.canonical_unit is not None:
             _units.get_unit(self.canonical_unit)
+        for unit in self.accepted_units:
+            _units.get_unit(unit)
+            if unit == self.canonical_unit or unit in self.unit_conversions:
+                raise ConceptError(f"Concept {self.id}: accepted unit {unit!r} duplicates the canonical unit or a conversion.")
         for unit, factor in self.unit_conversions.items():
             _units.get_unit(unit)
             if not isinstance(factor, (int, float)) or factor <= 0:
                 raise ConceptError(f"Concept {self.id}: conversion factor for {unit!r} must be a positive number.")
 
+    def stored_unit(self, unit: str) -> str | None:
+        """Unit in which a value reported in ``unit`` is stored: itself if accepted as measured, else the canonical unit."""
+        return unit if unit in self.accepted_units else self.canonical_unit
+
     def factor_to_canonical(self, unit: str) -> float:
-        """Factor converting ``unit`` to the canonical unit; raises if undefined."""
+        """Factor converting ``unit`` to the stored unit (1.0 for accepted-as-measured units); raises if undefined."""
         if self.canonical_unit is None:
             raise ConceptError(f"Concept {self.id} has no unit.")
-        if unit == self.canonical_unit:
+        if unit == self.canonical_unit or unit in self.accepted_units:
             return 1.0
         if unit in self.unit_conversions:
             return float(self.unit_conversions[unit])
@@ -117,6 +128,7 @@ class ConceptRegistry:
                     description=spec.pop("description"),
                     canonical_unit=spec.pop("canonical_unit", None),
                     unit_conversions=dict(spec.pop("unit_conversions", None) or {}),
+                    accepted_units=tuple(spec.pop("accepted_units", None) or ()),
                     references=dict(spec.pop("references", None) or {}),
                     domains=validate_domains(f"Concept {cid}", spec.pop("domains", None)),
                 )
@@ -205,7 +217,7 @@ def check_table_concepts(df: pd.DataFrame, registry: ConceptRegistry, kind: Conc
         if concept.kind is not kind:
             problems.append(f"concept {concept_id!r} is a {concept.kind.value}, not a {kind.value}")
         if unit_col and concept.canonical_unit is not None:
-            bad = set(group[unit_col].dropna().unique()) - {concept.canonical_unit}
+            bad = set(group[unit_col].dropna().unique()) - {concept.canonical_unit, *concept.accepted_units}
             if bad:
                 problems.append(f"concept {concept_id!r} stored in non-canonical unit(s) {sorted(bad)}")
     return problems

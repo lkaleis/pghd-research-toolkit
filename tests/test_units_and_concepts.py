@@ -80,9 +80,14 @@ def test_cardiometabolic_registry_loads_and_is_minimal():
     reg = ConceptRegistry.from_yaml(CARDIO_YAML)
     assert reg.get("glucose_interstitial").canonical_unit == "mg/dL"
     assert reg.get("glucose_interstitial").kind is ConceptKind.OBSERVATION
-    # HbA1c deliberately has no mmol/mol conversion (non-linear; not to be guessed)
+    # HbA1c is accepted in % (NGSP) and mmol/mol (IFCC), each stored as measured; no conversion is defined
+    # (the relation is affine and must not be guessed). Other units remain rejected.
+    h = reg.get("hba1c")
+    assert h.canonical_unit == "%" and h.accepted_units == ("mmol/mol",)
+    assert h.stored_unit("%") == "%" and h.stored_unit("mmol/mol") == "mmol/mol"
+    assert h.factor_to_canonical("mmol/mol") == 1.0
     with pytest.raises(ConceptError):
-        reg.get("hba1c").factor_to_canonical("mmol/L")
+        h.factor_to_canonical("mmol/L")
     assert len(reg.concepts) < 40  # guard against registry sprawl
 
 
@@ -133,3 +138,10 @@ def test_check_table_concepts():
     assert any("non-canonical" in p for p in problems)
     assert any("not a observation" in p for p in problems)
     assert any("unregistered concept 'mystery'" in p for p in problems)
+
+
+def test_check_table_concepts_accepts_both_hba1c_units():
+    reg = ConceptRegistry.from_yaml(CARDIO_YAML)
+    df = pd.DataFrame({"concept": ["hba1c"] * 3, "unit": ["%", "mmol/mol", "mmol/L"]})
+    problems = check_table_concepts(df, reg, ConceptKind.ATTRIBUTE)
+    assert problems == ["concept 'hba1c' stored in non-canonical unit(s) ['mmol/L']"]

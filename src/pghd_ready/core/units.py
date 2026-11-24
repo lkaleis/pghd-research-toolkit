@@ -56,6 +56,7 @@ _UNITS: tuple[UnitDef, ...] = (
     UnitDef("/min", "frequency", 1.0),
     UnitDef("kg/m2", "area_density", 1.0),
     UnitDef("%", "percent", 1.0),
+    UnitDef("mmol/mol", "substance_fraction", 1.0),
     UnitDef("1", "dimensionless", 1.0),
     UnitDef("{MET}", "metabolic_equivalent", 1.0),
     UnitDef("{steps}", "count", 1.0),

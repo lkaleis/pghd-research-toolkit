@@ -84,10 +84,10 @@ The toolkit aims to produce:
 |---|---|
 | Common representation (observations, events, participant attributes, streams) with schema validation | Implemented |
 | Explicit annotation of documented issues, suspected anomalies, semantic ambiguities and assumptions | Implemented |
-| Three-state sampling origin per observation (native / interpolated / unknown, default unknown) with explicit inclusion policies | Implemented (representation only; no real-data classifier yet) |
+| Three-state sampling origin per observation (native / interpolated / unknown, default unknown) with explicit inclusion policies | Implemented as a generic representation. Row-level classification of CGM values is not planned (deferred research consideration) |
 | Shared concept registry plus condition-specific registries, with optional many-to-many PGHD domain tags | Implemented (the four-term domain vocabulary is fixed in code; extending it requires a code change) |
 | Configuration-driven ingestion of delimited-text (CSV) sources, with provenance, rejected-record preservation and an analyst-readable ingestion report | Implemented, tested on a small synthetic example |
-| CGMacros ingestion | Planned (next milestone) |
+| CGMacros base ingestion (CGM, Fitbit, meals, participant attributes) with independent reconciliation tests | Implemented, run locally only (data not distributed); under review |
 | Data-quality profiling (coverage, gaps, sampling, plausibility, cross-stream agreement) | Planned |
 | Temporal alignment and task-specific predictive-fitness assessment | Planned |
 | JSON, FHIR or open mHealth inputs; free-text sources | Not implemented |
@@ -142,7 +142,9 @@ env -u PYTHONPATH .venv/bin/python -m pytest
 
 `data/raw/`, `data/processed/` and `reports/local/` are git-ignored. Participant-level outputs, including the ingestion report, stay local.
 
-**Known source caveat (CGMacros HbA1c):** the official data dictionary specifies HbA1c in mmol/mol, but the values appear consistent with NGSP %. The configuration stores them with unit `%` under an explicit assumption, without converting any value. Every value is flagged as a unit conflict, and the unit remains **unresolved**: it has not been independently verified with the data providers.
+**Known source caveats (CGMacros):**
+- **HbA1c:** the toolkit accepts HbA1c in either % (DCCT/NGSP) or mmol/mol (IFCC) and stores each value in the unit it was measured in, with no conversion (the relation is affine, so values in different units must not be pooled without an explicit, reviewed conversion). The CGMacros data dictionary labels HbA1c as mmol/mol, but the dataset paper (Das et al. 2025) reports it as % (mean 6.16 ± 0.91 %; groups defined by <5.7, 5.7–6.4 and >6.4 %), so the dictionary label appears to be a documentation error. CGMacros HbA1c is ingested as `%`, unchanged.
+- **CGM interpolation:** the dataset authors document that Libre (15-minute) and Dexcom (5-minute) readings were linearly interpolated to 1-minute intervals before release (Das et al. 2025, *Scientific Data*, doi:10.1038/s41597-025-05851-7). PGHD-Ready ingests the values as released and does not identify which individual values are original or interpolated. Analyses should not treat 1-minute CGM rows as independent sensor measurements.
 
 ## Guiding Principles
 
