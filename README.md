@@ -4,6 +4,8 @@
 
 ## Overview
 
+> **New here?** Start with the [end-to-end demonstration](demo/README.md), a five-minute tour from raw PGHD to a participant-validated prediction experiment on CGMacros, with [architecture diagrams](demo/architecture.md).
+
 Patient-generated health data (PGHD) collected through digital health applications, wearable devices, connected sensors, self-tracking tools, and patient-reported outcomes offer valuable opportunities to identify emerging health risks and strengthen real-world evidence for personalized healthcare.
 
 However, these data are often fragmented across sources, inconsistent in structure, variable in quality, and difficult to align over time. These challenges can affect the reliability of downstream statistical analyses and predictive models.
@@ -207,41 +209,9 @@ A separate experiment (`configs/experiments/breakfast_iauc_refinement.yaml`, mod
 
 ### M4 findings (complete)
 
-Cohort: CGMacros, 45 participants. 422 calculable Libre and 392 calculable Dexcom breakfasts, analysed independently and never pooled.
+On CGMacros (45 participants; 422 Libre and 392 Dexcom calculable breakfasts, analysed separately), leave-one-participant-out linear regression reduced participant-macro MAE by about a quarter to a third compared with a naive mean. The preferred specification is **Model B**, linear regression without total energy. It is no more accurate than the original nine-predictor model, but it removes severe collinearity. Fasting glucose and ridge regression added no detectable value. These are internal-validation results on a dataset-derived outcome, with no clinical claims.
 
-**Results.** Participant-macro MAE in mg/dL × min, with 95% participant-bootstrap intervals; leave-one-participant-out.
-
-| Model | Libre | Dexcom |
-|---|---|---|
-| Naive (training mean) | 2,987 [2,551, 3,491] | 3,303 [2,794, 3,912] |
-| A: linear, 9 approved predictors (reference) | 2,088 [1,730, 2,541] | 2,455 [2,080, 2,893] |
-| **B: A without total energy (preferred)** | **2,093 [1,731, 2,547]** | **2,451 [2,075, 2,889]** |
-| C: B + study-start fasting glucose | 2,131 [1,745, 2,594] | 2,508 [2,115, 2,966] |
-| D1 / D2: ridge on B / C | 2,088 / 2,091 | 2,427 / 2,458 |
-| Random forest (original M4, 9 predictors) | 2,331 [1,925, 2,815] | 2,849 [2,413, 3,337] |
-
-**Against the naive baseline.** Linear regression clearly improves on it: macro MAE is lower by 899 [507, 1,317] on Libre and 848 [450, 1,286] on Dexcom. R² relative to naive is about 0.40–0.42, and the calibration slope is 0.94. The random forest was not an improvement over linear regression.
-
-**Preferred specification: Model B.** B is not more accurate than A: the paired difference is −5 [−22, 13] on Libre and 4 [−1, 9] on Dexcom. Its advantage is a more defensible, less collinear specification with no meaningful loss in prediction performance:
-- the largest variance inflation factor falls from 59 (Libre) and 156 (Dexcom), both for energy, to about 2;
-- its coefficients keep the same signs on both devices, while A's energy coefficient changes sign between devices;
-- its macronutrient coefficients vary over a much narrower range across folds.
-
-**Fasting glucose and ridge.** Neither showed a detectable improvement.
-- Fasting glucose is strongly correlated with HbA1c (Spearman 0.87).
-- Good prediction does not establish individual predictor effects. Collinear predictors can trade weight with little change in predictions, so no coefficient is an independent or clinical effect.
-
-**Limitations:**
-- Small cohort: 45 independent participants.
-- Internal participant-level validation only, not external validation.
-- A designed breakfast protocol (protein shakes of set macronutrient composition), not unrestricted everyday meals.
-- Released CGM data are one-minute values interpolated by the dataset authors, which may affect both the baseline and the iAUC.
-- The target is a dataset-derived analytical quantity, not a clinically validated outcome.
-- No demonstrated clinical utility or generalisability to other populations, devices, conditions or meal settings.
-
-**What M4 demonstrates.** An end-to-end, reproducible workflow built with the toolkit: integrated PGHD (M1), quality assessment (M2), task-specific analytical preparation (M3), and participant-aware validation and modelling (M4). Lineage is hash-linked and outputs are deterministic. M4 is a bounded research demonstration, not a general-purpose ML platform or a validated clinical prediction system.
-
-**Provenance note.** Both experiment manifests currently record code commit `0894ee2-dirty`, because they were run before the experiment code was committed. Rerun both experiments after committing to obtain clean provenance.
+Full results, the reasoning behind the decision and the limitations are in the [end-to-end demonstration](demo/README.md#m4-participant-aware-prediction).
 
 ## Development and Tests
 
