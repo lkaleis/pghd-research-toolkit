@@ -92,7 +92,7 @@ The toolkit aims to produce:
 | Descriptive data-quality profiling (M2b: completeness, observed timestamp coverage, sampling intervals, gaps against documented or configured intervals, sampling origin), per participant, stream and day, with an aggregate report | Implemented, run locally on CGMacros |
 | Plausibility rules and cross-stream (Libre vs Dexcom) agreement | Planned |
 | Analytical preparation (M3): generic time windows, event alignment, attribute joins and an eligibility ledger with exclusion counts; first task: breakfast glucose response (signed iAUC, per CGM device) | First workflow implemented and run locally on CGMacros (outcomes per device; no modelling) |
-| Modelling and task-specific predictive-fitness assessment | Planned |
+| Predictive research demonstration (M4): breakfast iAUC from meal composition, baseline glucose and participant characteristics; naive, linear, random-forest and ridge models; leave-one-participant-out, per device | Complete. Run locally on CGMacros (internal validation only). Preferred specification: reduced linear model without total energy (Model B) |
 | JSON, FHIR or open mHealth inputs; free-text sources | Not implemented |
 | Medication-related and patient-reported data representations | Not implemented (see roadmap) |
 
@@ -101,8 +101,8 @@ Roadmap (each step is reviewed before the next begins):
 1. **M1** Foundation, generic ingestion engine and CGMacros ingestion. *(Complete.)*
 2. **M2** Standalone data-quality assessment. *(First milestones complete: consistency checks (M2a) and descriptive profiling (M2b). Plausibility rules and cross-stream agreement are still planned.)*
 3. **M3** Temporal alignment and task fitness. *(First workflow complete: breakfast glucose-response preparation, run on CGMacros. Further tasks are not planned yet.)*
-4. **M4** A second, differently structured synthetic source to test reuse.
-5. **M5** Initial experiment on how data limitations affect a predictive task. *(A bounded breakfast-iAUC prediction demonstration has been proposed; its milestone number and scope await approval. Nothing is implemented.)*
+4. **M4** Bounded predictive research demonstration: breakfast iAUC, per device, leave-one-participant-out. *(Complete. Preferred specification: Model B, reduced linear regression without total energy.)* A second, differently structured synthetic source is now treated as supporting test infrastructure, not a separate research milestone.
+5. **M5** Not yet defined.
 6. **M6** Medication adherence and multimodal PGHD: a medication event representation, prescribed regimens kept separate from patient-reported taking events, configurable ingestion of medication-tracking exports, and a synthetic adherence example.
 
 ## Trying the ingestion engine
@@ -161,6 +161,87 @@ Limitations of the breakfast workflow:
 - **The outcome is a dataset-derived quantity, not a measured physiological glucose response.** It is computed from interstitial CGM values as released (after the authors' interpolation), relative to a baseline computed from the same values, under operational calculability rules. It should be described as "calculable iAUC from CGMacros readings", not as a participant's true postprandial response.
 - **The baseline may contain post-meal information.** If the authors' interpolation is linear between device readings, one-minute values just before the meal lie on a line towards the first device reading at or after the meal: up to the last 15 min of the baseline window for Libre and 5 min for Dexcom. Any later use of the baseline as a predictor must take this into account.
 - **Non-calculable breakfasts are not missing at random by construction.** They are excluded for device-data reasons (for example no reading at t0 + 120 min), which differ between devices, so the calculable sets differ by device.
+
+## Breakfast iAUC prediction experiment (M4)
+
+A small, single-purpose experiment on the M3 analysis table, not a general ML framework. The random forest needs the optional extra (`pip install -e ".[experiment]"`, scikit-learn); without it, the naive and linear models still run and the report says the forest was skipped.
+
+```bash
+.venv/bin/python -m pghd_ready.conditions.cardiometabolic.experiments.breakfast_iauc \
+  --config configs/experiments/breakfast_iauc.yaml \
+  --task-dir data/processed/cgmacros/tasks/postprandial_breakfast \
+  --out data/processed/cgmacros/experiments/breakfast_iauc
+```
+
+Design (configured in `configs/experiments/breakfast_iauc.yaml`):
+- **Target:** the signed iAUC from M3, all calculable breakfasts, negatives kept.
+- **Predictors:** the approved set only (meal energy and macronutrients, baseline glucose, HbA1c, BMI, age). The code refuses any other column.
+- **Validation:** leave-one-participant-out, per device. All breakfasts of a participant stay in the same partition. No tuning, no nested CV, no hold-out set.
+- **Models:** training-fold mean (naive), ordinary least squares, and a random forest with fixed settings.
+- **Primary metric:** participant-macro MAE (MAE per held-out participant, averaged). Pooled MAE, RMSE, R² against naive and calibration are secondary. Intervals come from a bootstrap of whole participants, paired across models.
+- **Sensitivity analyses:** without baseline glucose; and the breakfasts calculable on both devices.
+
+Outputs: `experiment_report.md`, `metrics.json`, `model_metadata.json` and `experiment_manifest.json` (aggregate: input hashes back to M1, config hash, package versions), plus `split_assignments.parquet` and `oof_predictions.parquet`, which are participant-level and must stay local. Reruns are byte-identical.
+
+
+### Model refinement (M4): collinearity, fasting glucose and ridge
+
+A separate experiment (`configs/experiments/breakfast_iauc_refinement.yaml`, module `experiments/breakfast_iauc_refinement.py`) reads the M4 outputs without changing them. It uses the same rows and folds, and checks that its reference linear model reproduces the M4 predictions exactly. It compares, per device:
+- the M4 linear model (A);
+- A without total energy (B);
+- B plus study-start fasting glucose (C);
+- ridge on B and on C (D1, D2).
+
+```bash
+.venv/bin/python -m pghd_ready.conditions.cardiometabolic.experiments.breakfast_iauc_refinement \
+  --config configs/experiments/breakfast_iauc_refinement.yaml \
+  --task-dir data/processed/cgmacros/tasks/postprandial_breakfast --m1 data/processed/cgmacros \
+  --reference-dir data/processed/cgmacros/experiments/breakfast_iauc \
+  --out data/processed/cgmacros/experiments/breakfast_iauc_refinement
+```
+
+- **Ridge:** predictors are standardised with training-fold statistics only. Alpha comes from a fixed grid, chosen by inner leave-one-participant-out over the training participants (scaling is refitted in every inner fold), on participant-macro MAE, with ties going to the larger alpha.
+- **Comparisons:** paired improvement = MAE(reference) − MAE(candidate), using the same participant resamples as M4.
+- **Diagnostics:** the report adds variance inflation factors and coefficient stability across folds. Coefficients are descriptive, not independent or clinical effects.
+- **Fasting glucose** (`fasting_glucose_lab`) is one laboratory value per participant, documented as fasting and taken at study start. Its fasting status is documented but not independently verifiable. Its collection date and timing relative to individual breakfasts cannot be verified. It is distinct from the per-breakfast baseline glucose, and it is strongly correlated with HbA1c.
+
+### M4 findings (complete)
+
+Cohort: CGMacros, 45 participants. 422 calculable Libre and 392 calculable Dexcom breakfasts, analysed independently and never pooled.
+
+**Results.** Participant-macro MAE in mg/dL × min, with 95% participant-bootstrap intervals; leave-one-participant-out.
+
+| Model | Libre | Dexcom |
+|---|---|---|
+| Naive (training mean) | 2,987 [2,551, 3,491] | 3,303 [2,794, 3,912] |
+| A: linear, 9 approved predictors (reference) | 2,088 [1,730, 2,541] | 2,455 [2,080, 2,893] |
+| **B: A without total energy (preferred)** | **2,093 [1,731, 2,547]** | **2,451 [2,075, 2,889]** |
+| C: B + study-start fasting glucose | 2,131 [1,745, 2,594] | 2,508 [2,115, 2,966] |
+| D1 / D2: ridge on B / C | 2,088 / 2,091 | 2,427 / 2,458 |
+| Random forest (original M4, 9 predictors) | 2,331 [1,925, 2,815] | 2,849 [2,413, 3,337] |
+
+**Against the naive baseline.** Linear regression clearly improves on it: macro MAE is lower by 899 [507, 1,317] on Libre and 848 [450, 1,286] on Dexcom. R² relative to naive is about 0.40–0.42, and the calibration slope is 0.94. The random forest was not an improvement over linear regression.
+
+**Preferred specification: Model B.** B is not more accurate than A: the paired difference is −5 [−22, 13] on Libre and 4 [−1, 9] on Dexcom. Its advantage is a more defensible, less collinear specification with no meaningful loss in prediction performance:
+- the largest variance inflation factor falls from 59 (Libre) and 156 (Dexcom), both for energy, to about 2;
+- its coefficients keep the same signs on both devices, while A's energy coefficient changes sign between devices;
+- its macronutrient coefficients vary over a much narrower range across folds.
+
+**Fasting glucose and ridge.** Neither showed a detectable improvement.
+- Fasting glucose is strongly correlated with HbA1c (Spearman 0.87).
+- Good prediction does not establish individual predictor effects. Collinear predictors can trade weight with little change in predictions, so no coefficient is an independent or clinical effect.
+
+**Limitations:**
+- Small cohort: 45 independent participants.
+- Internal participant-level validation only, not external validation.
+- A designed breakfast protocol (protein shakes of set macronutrient composition), not unrestricted everyday meals.
+- Released CGM data are one-minute values interpolated by the dataset authors, which may affect both the baseline and the iAUC.
+- The target is a dataset-derived analytical quantity, not a clinically validated outcome.
+- No demonstrated clinical utility or generalisability to other populations, devices, conditions or meal settings.
+
+**What M4 demonstrates.** An end-to-end, reproducible workflow built with the toolkit: integrated PGHD (M1), quality assessment (M2), task-specific analytical preparation (M3), and participant-aware validation and modelling (M4). Lineage is hash-linked and outputs are deterministic. M4 is a bounded research demonstration, not a general-purpose ML platform or a validated clinical prediction system.
+
+**Provenance note.** Both experiment manifests currently record code commit `0894ee2-dirty`, because they were run before the experiment code was committed. Rerun both experiments after committing to obtain clean provenance.
 
 ## Development and Tests
 

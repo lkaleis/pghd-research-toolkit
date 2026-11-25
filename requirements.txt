@@ -9,5 +9,6 @@ pandera>=0.20
 pytest>=8.0
 # Reporting (milestone 2) - not yet installed
 # matplotlib>=3.8
-# Experiment only (milestone 5) - uncomment when needed
+# Experiment only (M4, optional extra 'experiment': pip install -e ".[experiment]"). Approved 2026-11-25.
+# The naive and linear models run without it; only the random forest needs it.
 # scikit-learn>=1.4

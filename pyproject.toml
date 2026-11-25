@@ -21,6 +21,7 @@ pghd-ready = "pghd_ready.cli:main"
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
+experiment = ["scikit-learn>=1.4"]  # M4 random forest only; naive and linear models run without it
 
 [tool.setuptools.packages.find]
 where = ["src"]

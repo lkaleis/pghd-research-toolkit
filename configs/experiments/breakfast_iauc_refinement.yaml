@@ -1,0 +1,66 @@
+# M4 model refinement: predictor collinearity, fasting glucose and ridge (owner approval 2026-11-25).
+# Separate from the M4 reference experiment (configs/experiments/breakfast_iauc.yaml), whose outputs are read only.
+# Internal participant-level validation within CGMacros only; not external validation, not a clinical model.
+experiment: breakfast_iauc_refinement
+version: "0.1.0"
+module: pghd_ready.conditions.cardiometabolic.experiments.breakfast_iauc_refinement
+dataset: cgmacros
+input_task: postprandial_breakfast
+reference:                               # M4 reference experiment: config and outputs, read only
+  config: configs/experiments/breakfast_iauc.yaml
+  analysis: primary                      # same rows: all calculable breakfasts (decision 4)
+
+target: iauc_signed_mgdl_min             # signed iAUC from M3, unchanged; negatives kept
+devices: [libre_pro, dexcom_g6]          # analysed independently, never pooled; same order as M4 (paired seeds)
+
+# The only predictor added in this experiment (decision 1). A single study-start laboratory value per participant,
+# documented as fasting; not the per-breakfast baseline glucose. Exact unit required, no conversion.
+added_attributes:
+  fasting_glucose_lab: mg/dL
+
+validation:
+  scheme: leave_one_participant_out
+  group: participant_id
+
+models:
+  A_ols_full:                            # the M4 reference linear model (must reproduce M4 exactly)
+    type: ols
+    predictors: [energy_kcal, carbohydrate_g, protein_g, fat_g, fiber_g, baseline_glucose_mgdl, hba1c, body_mass_index, age]
+  B_ols_reduced:                         # A without total energy
+    type: ols
+    predictors: [carbohydrate_g, protein_g, fat_g, fiber_g, baseline_glucose_mgdl, hba1c, body_mass_index, age]
+  C_ols_reduced_fasting:                 # B plus fasting glucose
+    type: ols
+    predictors: [carbohydrate_g, protein_g, fat_g, fiber_g, baseline_glucose_mgdl, hba1c, body_mass_index, age, fasting_glucose_lab]
+  D1_ridge_reduced:
+    type: ridge
+    predictors: [carbohydrate_g, protein_g, fat_g, fiber_g, baseline_glucose_mgdl, hba1c, body_mass_index, age]
+  D2_ridge_reduced_fasting:
+    type: ridge
+    predictors: [carbohydrate_g, protein_g, fat_g, fiber_g, baseline_glucose_mgdl, hba1c, body_mass_index, age, fasting_glucose_lab]
+
+ridge:                                   # decision 2
+  # minimise mean((y - mean(y) - Z b)^2) + alpha * ||b||^2, Z = predictors standardised with the training-fold
+  # mean and SD (population SD); intercept = training-fold mean of y, unpenalised.
+  alphas: [0.001, 0.00316227766, 0.01, 0.0316227766, 0.1, 0.316227766, 1.0, 3.16227766, 10.0, 31.6227766, 100.0]
+  selection: inner_leave_one_participant_out   # over the outer training participants only
+  criterion: participant_macro_mae
+  ties: larger_alpha
+
+# Paired improvement = MAE(reference) - MAE(candidate); positive = candidate has lower error (decision 3).
+comparisons:
+  - {candidate: B_ols_reduced, reference: A_ols_full}
+  - {candidate: C_ols_reduced_fasting, reference: A_ols_full}
+  - {candidate: D1_ridge_reduced, reference: A_ols_full}
+  - {candidate: D2_ridge_reduced_fasting, reference: A_ols_full}
+  - {candidate: C_ols_reduced_fasting, reference: B_ols_reduced}      # does fasting glucose add value?
+  - {candidate: D1_ridge_reduced, reference: B_ols_reduced}           # does ridge help (reduced)?
+  - {candidate: D2_ridge_reduced_fasting, reference: C_ols_reduced_fasting}   # does ridge help (with fasting)?
+
+metrics:
+  primary: participant_macro_mae
+
+bootstrap:                               # must equal the M4 reference settings (same participant resamples)
+  resamples: 2000
+  level: 0.95
+  seed: 20261125

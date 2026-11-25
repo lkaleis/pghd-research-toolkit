@@ -1,0 +1,52 @@
+# M4 predictive research demonstration: breakfast iAUC (CGMacros). Owner decisions P-1..P-8, 2026-11-25.
+# Internal participant-level validation within CGMacros only; not external validation, not a clinical model.
+experiment: breakfast_iauc
+version: "0.1.0"
+module: pghd_ready.conditions.cardiometabolic.experiments.breakfast_iauc
+input_task: postprandial_breakfast      # M3 analysis table, calculable rows only
+
+target: iauc_signed_mgdl_min            # signed iAUC as computed in M3; negatives kept, nothing clamped
+predictors:                             # the approved M3 predictor set, unchanged (enforced in code)
+  - energy_kcal
+  - carbohydrate_g
+  - protein_g
+  - fat_g
+  - fiber_g
+  - baseline_glucose_mgdl
+  - hba1c
+  - body_mass_index
+  - age
+
+devices: [libre_pro, dexcom_g6]         # analysed independently, never pooled; no primary device (P-6)
+
+validation:
+  scheme: leave_one_participant_out     # P-3; no hold-out set, no nested CV, no tuning
+  group: participant_id
+
+models:
+  naive: {}                             # training-fold mean of the target
+  linear: {}                            # ordinary least squares with intercept (numpy; no scikit-learn needed)
+  random_forest:                        # P-7: fixed in advance; needs the optional 'experiment' extra
+    n_estimators: 500
+    min_samples_leaf: 5
+    max_features: 1.0
+    random_state: 20261125
+
+analyses:
+  - name: primary
+    subset: all_calculable
+    drop_predictors: []
+  - name: no_baseline_glucose           # sensitivity: interpolation-related leakage through the baseline predictor
+    subset: all_calculable
+    drop_predictors: [baseline_glucose_mgdl]
+  - name: common_breakfasts             # sensitivity (P-5): breakfasts calculable on every device, still per device
+    subset: common_breakfasts
+    drop_predictors: []
+
+metrics:
+  primary: participant_macro_mae        # P-8 + owner requirement: MAE per held-out participant, then averaged
+
+bootstrap:                              # whole participants are resampled, never individual breakfasts
+  resamples: 2000
+  level: 0.95
+  seed: 20261125
