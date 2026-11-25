@@ -92,7 +92,7 @@ def _cov(res):
 
 
 # ------------------------------------------------------------------ shipped configuration
-def test_shipped_rule_application_and_reference_load_and_rule_does_not_run():
+def test_shipped_rule_application_and_reference_load_approved_and_authorized():
     refs = cs.load_references(QUALITY / "references.yaml")
     rules = cs.load_rules(QUALITY / "rules" / "cardiometabolic.yaml")
     apps = cs.load_applications(QUALITY / "applications" / "cgmacros.yaml")
@@ -101,22 +101,82 @@ def test_shipped_rule_application_and_reference_load_and_rule_does_not_run():
     assert rule.target == cs.Term("non_hdl_cholesterol", "mg/dL")
     assert [(t.concept, t.unit, t.coefficient) for t in rule.operands] == [
         ("total_cholesterol", "mg/dL", Decimal(1)), ("hdl_cholesterol", "mg/dL", Decimal(-1))]
-    assert rule.technical_review.status == "draft" and rule.clinical_review.status == "not_reviewed"
+    # technical approval by the owner (2026-11-25), bound to the reviewed rule content
+    tr = rule.technical_review
+    assert (tr.status, tr.by, tr.on) == ("technically_approved", "project owner", "2026-11-25")
+    assert tr.content_sha256 == cs.rule_content_sha256(rule) == (
+        "07546a4d26a96531c78b05b705436a355be0b44f4f69dc9a0bda7939a9b42e9c")
+    assert rule.clinical_review.status == "not_reviewed"
     assert refs[rule.reference_id].verified and "page II-7" in rule.reference_locator
     (app,) = apps
-    assert app.run_authorization.status == "not_authorized"
+    # review-mode run authorisation by the owner (2026-11-25), bound to the application content
+    auth = app.run_authorization
+    assert (auth.status, auth.by, auth.on) == ("review_mode_authorized", "project owner", "2026-11-25")
+    assert auth.content_sha256 == cs.application_content_sha256(app, rule) == (
+        "8a6a5af72ed54715dc0c42044de6c66233f47b234f150799d19b789e83175343")
     assert app.dataset == "cgmacros" and app.assumption_ids == ("A-CGMACROS-LIPID-01",)
     assert "assumption, not a verified dataset fact" in app.assumptions["A-CGMACROS-LIPID-01"].statement
     assert all(v == Decimal(1) for v in app.resolution.values()) and app.same_measured_at_raw
-    with pytest.raises(cs.ConsistencyError, match="not technically approved"):
-        cs.evaluate(rule, app, refs, _df(_panel("001", "200", "50", "150", 2, dataset="cgmacros")))
-    # even a technically approved copy of the rule does not run on CGMacros without run authorisation
-    approved = cs.DerivationRule(**{**rule.__dict__, "technical_review": cs.Review(
-        "technically_approved", "t", "d", content_sha256=cs.rule_content_sha256(rule))})
-    with pytest.raises(cs.ConsistencyError, match="not authorised to run on dataset 'cgmacros'"):
-        cs.evaluate(approved, app, refs, _df(_panel("001", "200", "50", "150", 2, dataset="cgmacros")))
-    # the shipped configuration records no approval hashes (approval is the owner's step)
-    assert rule.technical_review.content_sha256 is None and app.run_authorization.content_sha256 is None
+    # all gates pass for the shipped configuration (synthetic rows only; no CGMacros data is read)
+    res = cs.evaluate(rule, app, refs, _df(_panel("001", "200", "50", "152", 2, dataset="cgmacros")))
+    assert _cov(res)["n_discrepancies"] == 1
+
+
+def test_unquoted_yaml_on_key_is_refused_and_quoted_key_loads(tmp_path):
+    """YAML 1.1 reads an unquoted `on:` key as boolean True; approval blocks are loaded from YAML text here."""
+    digest = cs.rule_content_sha256(cs.rules_from_mapping(SYNTH_RULE)["T-NONHDL"])
+    rule_text = """\
+rules:
+  T-NONHDL:
+    version: "1.0.0"
+    title: non-HDL = TC - HDL (test)
+    type: linear_derivation
+    target: {concept: non_hdl_cholesterol, unit: mg/dL}
+    operands:
+      - {concept: total_cholesterol, unit: mg/dL, coefficient: 1}
+      - {concept: hdl_cholesterol, unit: mg/dL, coefficient: -1}
+    reference: {id: REF-SYNTH, locator: eq. 1}
+    rationale: test
+    technical_review:
+      status: technically_approved
+      by: test
+      ON_KEY: "2026-11-24"
+      content_sha256: DIGEST
+    clinical_review: {status: not_reviewed}
+""".replace("DIGEST", digest)
+    app_text = """\
+dataset: syn
+assumptions:
+  A-SYN-01: {statement: test assumption, approved_by: test, approved_on: "2026-11-24"}
+applications:
+  - rule_id: T-NONHDL
+    rule_version: "1.0.0"
+    run_authorization:
+      status: review_mode_authorized
+      by: test
+      ON_KEY: "2026-11-24"
+    co_measurement: {same_record: true, same_measured_at_raw: true, assumption_id: A-SYN-01}
+    resolution:
+      non_hdl_cholesterol: {value: 1, unit: mg/dL, assumption_id: A-SYN-01}
+      total_cholesterol: {value: 1, unit: mg/dL, assumption_id: A-SYN-01}
+      hdl_cholesterol: {value: 1, unit: mg/dL, assumption_id: A-SYN-01}
+"""
+    rules_path, app_path = tmp_path / "rules.yaml", tmp_path / "app.yaml"
+    # unquoted: refused with a clear instruction (rule and application loaders)
+    rules_path.write_text(rule_text.replace("ON_KEY", "on"), encoding="utf-8")
+    with pytest.raises(cs.ConsistencyError, match=r'technical_review: a key was read as boolean True.*Quote it as "on"'):
+        cs.load_rules(rules_path)
+    app_path.write_text(app_text.replace("ON_KEY", "on"), encoding="utf-8")
+    with pytest.raises(cs.ConsistencyError, match=r'run_authorization: a key was read as boolean True'):
+        cs.load_applications(app_path)
+    # quoted: loads, and the approval and authorisation records carry 'on'
+    rules_path.write_text(rule_text.replace("ON_KEY", '"on"'), encoding="utf-8")
+    rule = cs.load_rules(rules_path)["T-NONHDL"]
+    assert (rule.technical_review.by, rule.technical_review.on) == ("test", "2026-11-24")
+    cs.validate_rule(rule, cs.references_from_mapping(SYNTH_REF))   # by, on and hash all satisfied
+    app_path.write_text(app_text.replace("ON_KEY", '"on"'), encoding="utf-8")
+    auth = cs.load_applications(app_path)[0].run_authorization
+    assert (auth.by, auth.on) == ("test", "2026-11-24")
 
 
 def test_shipped_rule_and_application_meet_the_new_safeguards():

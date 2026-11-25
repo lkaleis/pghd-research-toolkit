@@ -20,9 +20,10 @@ applications:
   - rule_id: CM-CONS-NONHDL-001
     rule_version: "1.0.0"
     run_authorization:             # owner authorisation to run this rule on this dataset; separate from rule review
-      status: not_authorized       # not_authorized | review_mode_authorized
-      by: null
-      on: null
+      status: review_mode_authorized   # not_authorized | review_mode_authorized
+      by: project owner
+      "on": "2026-11-25"
+      content_sha256: 8a6a5af72ed54715dc0c42044de6c66233f47b234f150799d19b789e83175343
     co_measurement:
       same_record: true            # same participant, source file and source row
       same_measured_at_raw: true   # identical lab collection time text on target and operands

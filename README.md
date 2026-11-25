@@ -88,18 +88,21 @@ The toolkit aims to produce:
 | Shared concept registry plus condition-specific registries, with optional many-to-many PGHD domain tags | Implemented (the four-term domain vocabulary is fixed in code; extending it requires a code change) |
 | Configuration-driven ingestion of delimited-text (CSV) sources, with provenance, rejected-record preservation and an analyst-readable ingestion report | Implemented, tested on a small synthetic example |
 | CGMacros base ingestion (CGM, Fitbit, meals, participant attributes) with independent reconciliation tests | Implemented, run locally only (data not distributed) |
-| Data-quality profiling (coverage, gaps, sampling, plausibility, cross-stream agreement) | Planned |
-| Temporal alignment and task-specific predictive-fitness assessment | Planned |
+| Definition-based consistency checks (M2a; first rule: non-HDL = TC − HDL) with reviewed, content-hashed approval and per-dataset run authorisation | Implemented; CGMacros run in review mode only (in-memory, aggregate) |
+| Descriptive data-quality profiling (M2b: completeness, observed timestamp coverage, sampling intervals, gaps against documented or configured intervals, sampling origin), per participant, stream and day, with an aggregate report | Implemented, run locally on CGMacros |
+| Plausibility rules and cross-stream (Libre vs Dexcom) agreement | Planned |
+| Analytical preparation (M3): generic time windows, event alignment, attribute joins and an eligibility ledger with exclusion counts; first task: breakfast glucose response (signed iAUC, per CGM device) | First workflow implemented and run locally on CGMacros (outcomes per device; no modelling) |
+| Modelling and task-specific predictive-fitness assessment | Planned |
 | JSON, FHIR or open mHealth inputs; free-text sources | Not implemented |
 | Medication-related and patient-reported data representations | Not implemented (see roadmap) |
 
 Roadmap (each step is reviewed before the next begins):
 
-1. **M1** Foundation, generic ingestion engine and CGMacros ingestion.
-2. **M2** Standalone data-quality profiling.
-3. **M3** Temporal alignment and task fitness.
+1. **M1** Foundation, generic ingestion engine and CGMacros ingestion. *(Complete.)*
+2. **M2** Standalone data-quality assessment. *(First milestones complete: consistency checks (M2a) and descriptive profiling (M2b). Plausibility rules and cross-stream agreement are still planned.)*
+3. **M3** Temporal alignment and task fitness. *(First workflow complete: breakfast glucose-response preparation, run on CGMacros. Further tasks are not planned yet.)*
 4. **M4** A second, differently structured synthetic source to test reuse.
-5. **M5** Initial experiment on how data limitations affect a predictive task.
+5. **M5** Initial experiment on how data limitations affect a predictive task. *(A bounded breakfast-iAUC prediction demonstration has been proposed; its milestone number and scope await approval. Nothing is implemented.)*
 6. **M6** Medication adherence and multimodal PGHD: a medication event representation, prescribed regimens kept separate from patient-reported taking events, configurable ingestion of medication-tracking exports, and a synthetic adherence example.
 
 ## Trying the ingestion engine
@@ -116,6 +119,48 @@ python -m venv .venv && .venv/bin/pip install -e ".[dev]"
 ```
 
 The run writes standardised Parquet tables, detailed audit files and `ingestion_report.md`. The report explains in plain language what was read, mapped, transformed, flagged or rejected. A successful ingestion run does not mean the data are fit for any particular analysis.
+
+## Profiling data quality (M2b)
+
+`pghd-ready profile` describes a finished ingestion run. It does not modify, interpolate, resample or impute observations, and it produces no findings or thresholds.
+
+```bash
+.venv/bin/pghd-ready profile --m1 data/processed/cgmacros --out data/processed/cgmacros/quality
+# optional, for a stream with no documented interval:  --expected-interval fitbit_hr=60   (and --gap-factor, default 1.5)
+```
+
+Outputs:
+- `profile_report.md` (aggregate only) and `profile_manifest.json` (input and output hashes, code commit, parameters).
+- Participant-level tables, which must stay local: `stream_profile`, `daily_profile` and `gaps`, plus `dataset_summary` (one row per stream).
+
+Metric definitions are in `src/pghd_ready/core/profiling.py`. Key limitations:
+- **Observed span is not wear-time.** It is the time between the first and last observed timestamp, and readings do not establish that a device was worn.
+- **Gaps are assessed only where an expected interval exists.** That interval must be documented in the source configuration or passed explicitly with `--expected-interval`. It is never inferred from the data. For CGMacros, only Libre (900 s) and Dexcom (300 s) have documented intervals, so Fitbit gaps are reported as not assessed.
+- **CGMacros CGM values were interpolated by the dataset authors to 1-minute rows.** For CGM, use slot coverage at the documented interval rather than counts of 1-minute rows. Every sampling origin is `unknown`.
+- **Dates are as recorded.** CGMacros dates are shifted, so calendar days are not real dates.
+
+## Preparing an analysis table (M3)
+
+`pghd-ready prepare` runs a task definition on a finished ingestion run. It writes:
+- a per-candidate eligibility ledger, window readings and an analysis table (all participant-level, so they must stay local);
+- an aggregate `task_report.md` and a manifest.
+
+No model is fitted, and observations are never resampled or imputed.
+
+```bash
+.venv/bin/pghd-ready prepare --task configs/tasks/postprandial_breakfast.yaml \
+  --m1 data/processed/cgmacros --out data/processed/cgmacros/tasks/postprandial_breakfast
+```
+
+Generic mechanics are in `core/alignment.py` and `core/eligibility.py`. Research-specific definitions are in the task config and `conditions/cardiometabolic/tasks/postprandial.py`: outcome, baseline, meal separation, predictors and calculability rules.
+
+Limitations of the breakfast workflow:
+- **Outcome thresholds are operational, not clinically validated.** Minimum baseline readings are 1 (Libre) and 3 (Dexcom). The longest interval the trapezoid may span is 15 min (Libre) and 5 min (Dexcom). These are based on the documented device intervals.
+- **The thresholds apply to the readings as released, not to native device samples.** CGMacros CGM readings are one-minute values that the dataset authors document as interpolated, and their sampling origin is reported as `unknown`. So the thresholds cannot detect gaps that were filled before release, and the iAUC may reflect that interpolation.
+- **iAUC is signed** (area below baseline is not clamped) and is reported separately per device. No comparison between devices is made.
+- **The outcome is a dataset-derived quantity, not a measured physiological glucose response.** It is computed from interstitial CGM values as released (after the authors' interpolation), relative to a baseline computed from the same values, under operational calculability rules. It should be described as "calculable iAUC from CGMacros readings", not as a participant's true postprandial response.
+- **The baseline may contain post-meal information.** If the authors' interpolation is linear between device readings, one-minute values just before the meal lie on a line towards the first device reading at or after the meal: up to the last 15 min of the baseline window for Libre and 5 min for Dexcom. Any later use of the baseline as a predictor must take this into account.
+- **Non-calculable breakfasts are not missing at random by construction.** They are excluded for device-data reasons (for example no reading at t0 + 120 min), which differ between devices, so the calculable sets differ by device.
 
 ## Development and Tests
 

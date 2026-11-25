@@ -24,14 +24,15 @@ rules:
       - Values stored in a unit other than mg/dL, or converted during ingestion, are not evaluated.
       - Records with TC and HDL but no reported non-HDL are not candidates.
     technical_review:
-      status: draft
-      by: null
-      on: null
+      status: technically_approved
+      by: project owner
+      "on": "2026-11-25"
+      content_sha256: 07546a4d26a96531c78b05b705436a355be0b44f4f69dc9a0bda7939a9b42e9c
       notes: >-
-        Implementation tested on synthetic data only. Reference content and locator verified by the project owner
-        (2026-11-24); technical approval pending owner review of the implementation.
+        Implementation reviewed at commit 180dfcc (synthetic tests; reference verified 2026-11-24).
+        Approval covers the rule content identified by content_sha256.
     clinical_review:
       status: not_reviewed
       by: null
-      on: null
+      "on": null
       notes: Definitional consistency rule; clinical review not required to run, and none has been performed.

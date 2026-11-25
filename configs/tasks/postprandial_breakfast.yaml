@@ -1,0 +1,46 @@
+# M3 reference workflow: breakfast glucose response (CGMacros). Analytical preparation only; no modelling.
+# Research-specific definitions live here and in the task module named below, not in the generic core.
+task: postprandial_breakfast
+version: "0.1.0"
+module: pghd_ready.conditions.cardiometabolic.tasks.postprandial
+dataset: cgmacros
+
+index_events: {event_type: meal, event_subtype: breakfast}
+separation:                      # owner decision 2026-11-25
+  events: {event_type: meal}     # any meal of any subtype (snacks included, decision D-3)
+  before_min: 60                 # exclude if another meal in [t0 - 60 min, t0)
+  after_min: 120                 # exclude if another meal in [t0, t0 + 120 min]
+near_duplicate_flag_min: 2       # flag (never merge) another meal within 2 min of the index meal
+
+devices: [libre_pro, dexcom_g6]  # analysed separately, never pooled (decision D-2)
+glucose: {concept: glucose_interstitial, unit: mg/dL}
+
+sampling_origin:
+  policy: native_and_unknown     # owner decision 2026-11-25: unknown-origin readings explicitly allowed
+  note: >-
+    All CGMacros CGM readings have sampling origin 'unknown' and are reported as such, never as native.
+    The released files contain one-minute CGM rows although the documented device intervals are 15 min (Libre Pro)
+    and 5 min (Dexcom G6). Das et al. (2025, Scientific Data, doi:10.1038/s41597-025-05851-7) document that the
+    readings were linearly interpolated to one-minute intervals before release. Interpolated values may affect
+    the outcome (incremental AUC) and its interpretation. Observation coverage is not proof of native device
+    coverage or of adequate outcome measurement.
+
+baseline:                        # mean glucose over the 15 min before the meal: [t0 - 15 min, t0)
+  start_min: -15
+  end_min: 0
+  min_readings:                  # owner decision 2026-11-25: operational thresholds from the documented device
+    libre_pro: 1                 # sampling intervals (15 min Libre, 5 min Dexcom), not clinically validated
+    dexcom_g6: 3
+
+outcome:                         # signed incremental AUC over [t0, t0 + 120 min], trapezoidal, mg/dL x min
+  start_min: 0
+  end_min: 120
+  max_gap_min:                   # owner decision 2026-11-25: longest interval between consecutive readings the
+    libre_pro: 15                # trapezoid may span (a straight line across the interval); operational, based on
+    dexcom_g6: 5                 # the documented device sampling intervals, not clinically validated
+
+predictors:
+  event: [energy_kcal, carbohydrate_g, protein_g, fat_g, fiber_g]
+  attributes: {hba1c: "%", body_mass_index: kg/m2, age: a}
+  # baseline glucose (the baseline mean above) is also a predictor.
+  # Excluded by owner decision: amount_consumed_raw (semantics unclear) and all calendar features (dates shifted).

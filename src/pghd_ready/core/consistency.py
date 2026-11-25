@@ -230,6 +230,9 @@ _SHA256 = re.compile(r"[0-9a-f]{64}")
 
 
 def _review(spec: Mapping[str, Any], enum: type[Enum], where: str, hashed: bool = False) -> Review:
+    if any(k is True for k in spec):  # YAML 1.1 (PyYAML) reads an unquoted `on:` key as boolean True
+        raise ConsistencyError(f"{where}: a key was read as boolean True; YAML treats an unquoted `on:` key as a "
+                               f'boolean. Quote it as "on":.')
     status = _req(spec, "status", where)
     try:
         enum(status)
