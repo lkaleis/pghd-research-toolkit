@@ -232,7 +232,9 @@ data/synthetic/*
 
 # Private project documentation
 PROJECT_BRIEF.md
-docs/
+docs/*
+# ...except the public modelling report
+!docs/modelling_report.md
 planning/
 
 # Claude-specific files
