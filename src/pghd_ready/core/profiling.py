@@ -10,8 +10,9 @@ Metric definitions (all computed per participant x stream unless stated otherwis
 * ``n_timestamp_missing``: rows without a timestamp; they are excluded from all temporal metrics.
 * ``n_distinct_timestamps`` / ``n_duplicate_timestamp_rows``: distinct timestamps, and rows beyond the first
   at an already-seen timestamp. Interval and gap metrics use distinct timestamps.
-* ``source_rows`` / ``value_present_fraction``: rows in the participant's source file(s) (M1 file stats) and
-  the fraction of them that produced an observation for this stream. Meaningful for wide files in which
+* ``source_rows`` / ``value_present_fraction``: rows in the source file(s) that this stream's observations
+  came from for the participant (M1 file stats), and the fraction of them that produced an observation for
+  this stream. Meaningful for wide files in which
   each row is one time point; it describes the file, not the device.
 * ``first_timestamp`` / ``last_timestamp`` / ``observed_span_hours``: earliest and latest observed timestamp
   and the time between them. **This is observed timestamp coverage, not device wear-time**: readings do not
@@ -155,13 +156,17 @@ def profile_observations(observations: pd.DataFrame, streams: pd.DataFrame,
     prof = prof.merge(exp, on="stream_id", how="left")
     prof["expected_interval_basis"] = prof["expected_interval_basis"].fillna("none")
 
-    # completeness against the source file rows (wide files: one row per time point)
+    # completeness against the source file rows (wide files: one row per time point). The denominator is
+    # the rows of the files THIS stream's observations came from, per participant and stream: a source that
+    # puts streams in separate files (e.g. one CGM file and one HR file per participant) must not divide
+    # one stream's count by the other stream's rows.
     prof["source_rows"] = np.nan
     if file_stats is not None and len(file_stats) and "source_file" in obs:
-        files = obs[["participant_id", "source_file"]].drop_duplicates()
+        files = obs[KEY + ["source_file"]].drop_duplicates()
         n_rec = file_stats.groupby("source_file")["n_records"].sum()
-        per_pid = files.assign(n=files["source_file"].map(n_rec)).groupby("participant_id")["n"].sum(min_count=1)
-        prof["source_rows"] = prof["participant_id"].map(per_pid)
+        per_key = (files.assign(n=files["source_file"].map(n_rec)).groupby(KEY)["n"].sum(min_count=1)
+                   .rename("source_rows"))
+        prof = prof.drop(columns="source_rows").merge(per_key.reset_index(), on=KEY, how="left")
     prof["value_present_fraction"] = (prof["n_observations"] - prof["n_value_missing"]) / prof["source_rows"]
 
     # gaps and slot coverage, only where an expected interval exists

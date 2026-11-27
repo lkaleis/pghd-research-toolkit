@@ -49,7 +49,7 @@ Domains describe the data. They are not separate software modules, and one strea
 
 ## Initial Research Application
 
-The first application is cardiometabolic health, using the **CGMacros** dataset. It asks how data quality, measurement characteristics, temporal alignment and modality availability affect the reliability and predictive suitability of integrated PGHD. A differently structured synthetic dataset will later test whether the ingestion architecture is portable.
+The first application is cardiometabolic health, using the **CGMacros** dataset. It asks how data quality, measurement characteristics, temporal alignment and modality availability affect the reliability and predictive suitability of integrated PGHD. Portability was then tested on a second, independently collected dataset (BIG IDEAs Lab, Dexcom G6 and Empatica E4): ingestion and quality profiling ran through a new configuration file, with no source-specific code. See the [portability report](docs/portability_report.md).
 
 ## Longer-Term Direction
 
@@ -75,6 +75,7 @@ The aim is to extend the toolkit to other health domains, such as behavioural he
 | Sampling origin per observation (native / interpolated / unknown; default unknown) with explicit inclusion policies | Implemented generically. Row-level classification of CGM values is not planned |
 | Shared and condition-specific concept registries with optional PGHD domain tags | Implemented. The four domain terms are fixed in code |
 | Configuration-driven CSV ingestion with provenance, rejected-record preservation and a plain-language ingestion report | Implemented, tested on a small synthetic example |
+| Portability to a second real dataset (BIG IDEAs Lab: Dexcom G6, Empatica E4 heart rate, food log) | Ingestion and profiling run by configuration only, locally. See the [portability report](docs/portability_report.md) |
 | CGMacros ingestion (CGM, Fitbit, meals, participant attributes), checked against an independent reference profiler | Implemented, run locally only |
 | Definition-based consistency checks (first rule: non-HDL = total cholesterol − HDL) with reviewed approval | Implemented. Run on CGMacros in review mode (aggregate only) |
 | Descriptive data-quality profiling: completeness, timestamp coverage, sampling intervals, gaps, sampling origin, per participant, stream and day | Implemented, run locally on CGMacros |

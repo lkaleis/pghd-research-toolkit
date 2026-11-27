@@ -235,6 +235,7 @@ PROJECT_BRIEF.md
 docs/*
 # ...except the public modelling report
 !docs/modelling_report.md
+!docs/portability_report.md
 planning/
 
 # Claude-specific files

@@ -71,6 +71,28 @@ def test_value_present_fraction_uses_source_file_rows():
     assert pd.isna(_row(pr.profile_observations(obs, _streams(cgm=None))).value_present_fraction)
 
 
+def test_value_present_fraction_counts_only_the_streams_own_files():
+    # streams in separate files per participant (e.g. a CGM export and an HR export): each stream's
+    # denominator is its own file, never the other stream's rows
+    obs = pd.concat([_obs("syn:1", "cgm", [0, 300, 600], file="cgm.csv"),
+                     _obs("syn:1", "hr", list(range(100)), file="hr.csv")], ignore_index=True)
+    fs = pd.DataFrame({"source_file": ["cgm.csv", "hr.csv"], "n_records": [4, 100]})
+    prof = pr.profile_observations(obs, _streams(cgm=None, hr=None), file_stats=fs)
+    cgm, hr = _row(prof, stream="cgm"), _row(prof, stream="hr")
+    assert cgm.source_rows == 4 and cgm.value_present_fraction == pytest.approx(0.75)
+    assert hr.source_rows == 100 and hr.value_present_fraction == pytest.approx(1.0)
+
+
+def test_value_present_fraction_wide_file_shared_by_streams():
+    # one wide file feeding two streams (the CGMacros layout): both use that file's rows
+    obs = pd.concat([_obs("syn:1", "cgm", [0, 60], file="w.csv"),
+                     _obs("syn:1", "hr", [0, 60, 120, 180], file="w.csv")], ignore_index=True)
+    fs = pd.DataFrame({"source_file": ["w.csv"], "n_records": [8]})
+    prof = pr.profile_observations(obs, _streams(cgm=None, hr=None), file_stats=fs)
+    assert _row(prof, stream="cgm").value_present_fraction == pytest.approx(0.25)
+    assert _row(prof, stream="hr").value_present_fraction == pytest.approx(0.5)
+
+
 # ------------------------------------------------------------------ gaps and slot coverage
 def test_gap_definition_boundary_and_totals():
     # E = 300, factor 1.5: 450 s is on time (not a gap), 451 s and 1800 s are gaps
